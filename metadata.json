@@ -1,0 +1,6 @@
+{
+  "name": "Sistem Manajemen Data dan Arsip Siswa",
+  "description": "Aplikasi terpusat untuk input data siswa, manajemen arsip dokumen terintegrasi Google Drive & Sheets, log aktivitas, dasbor manajemen hak akses, analisis dokumen, dan notifikasi sistem.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
