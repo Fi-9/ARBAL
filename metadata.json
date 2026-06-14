@@ -1,6 +1,6 @@
 {
-  "name": "Sistem Manajemen Data dan Arsip Siswa",
-  "description": "Aplikasi terpusat untuk input data siswa, manajemen arsip dokumen terintegrasi Google Drive & Sheets, log aktivitas, dasbor manajemen hak akses, analisis dokumen, dan notifikasi sistem.",
+  "name": "ARBAL - Arsip Mustaqbal",
+  "description": "Aplikasi manajemen data dan arsip digital siswa PKBM Teknologi Mustaqbal terintegrasi Google Workspace (Drive & Sheets).",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }
