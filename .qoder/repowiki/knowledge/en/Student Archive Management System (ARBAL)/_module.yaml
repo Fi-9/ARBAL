@@ -1,0 +1,32 @@
+schema_version: 1
+module_path: ""
+title: Student Archive Management System (ARBAL)
+scope:
+    - README.md
+    - PRD.md
+    - DEPLOYMENT_PLAN.md
+    - .gitignore
+    - index.html
+    - metadata.json
+    - package.json
+    - package-lock.json
+    - tsconfig.json
+    - vite.config.ts
+    - src/
+    - .env.example
+    - assets\.aistudio\.gitignore
+    - src\App.tsx
+    - src\components\ActivityLogView.tsx
+    - src\components\DashboardView.tsx
+    - src\components\NotificationCenter.tsx
+    - src\components\SecurityAndAccessView.tsx
+    - src\components\Sidebar.tsx
+    - src\components\StudentDirectoryView.tsx
+    - src\components\StudentFormView.tsx
+    - src\index.css
+    - src\main.tsx
+    - src\mockData.ts
+    - src\types.ts
+source_files: []
+depends_on: []
+related_to: []

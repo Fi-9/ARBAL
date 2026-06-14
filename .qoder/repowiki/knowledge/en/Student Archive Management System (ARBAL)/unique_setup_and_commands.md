@@ -1,0 +1,3 @@
+- **Environment Setup**: Requires a `GEMINI_API_KEY` in `.env.local` for AI scanner functionality.
+- **Development Server**: Run `npm run dev` to start the Vite server on port 3000.
+- **Build Process**: Use `npm run build` to generate production assets in the `dist` directory.

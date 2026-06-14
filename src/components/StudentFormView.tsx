@@ -3,19 +3,16 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
+import { uploadDocument } from '../services/document.service';
 import { 
-  Sparkles, 
   UserPlus, 
   Edit3, 
   ArrowLeft, 
   Save, 
   HelpCircle,
-  BrainCircuit,
-  FileSearch2,
   RefreshCw,
   Layout,
-  CheckCircle2,
   FileSpreadsheet,
   X,
   FileText,
@@ -87,14 +84,7 @@ export default function StudentFormView({
     ktpIbuDoc: null,
   });
 
-  // Scanning simulation state
-  const [showAiScanner, setShowAiScanner] = useState(false);
-  const [isScanning, setIsScanning] = useState(false);
-  const [scanProgressLogs, setScanProgressLogs] = useState<string[]>([]);
-  const [scannedDocType, setScannedDocType] = useState<'kk' | 'akta' | 'ijazah' | 'ktp_ayah' | 'ktp_ibu'>('kk');
-  const [flashFields, setFlashFields] = useState(false);
-
-  // Initialize form if editing
+  // Real file picker reference and pending document type tracker
   useEffect(() => {
     if (editingStudent) {
       setNama(editingStudent.nama);
@@ -269,251 +259,123 @@ export default function StudentFormView({
     );
   };
 
-  // Simulated Manual File Selector Trigger
-  const handleSimulateUpload = (type: 'ijazah' | 'kk' | 'akta' | 'rapor' | 'ktpAyahDoc' | 'ktpIbuDoc') => {
-    let mockFileName = '';
-    let mockSize = '1.2 MB';
+  // Real file picker reference and pending document type tracker
+  type DocKey = 'ijazah' | 'kk' | 'akta' | 'rapor' | 'ktpAyahDoc' | 'ktpIbuDoc';
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [pendingDocType, setPendingDocType] = useState<DocKey | null>(null);
 
-    if (type === 'ijazah') {
-      mockFileName = `Ijazah_SMP_${nama.replace(/\s+/g, '_') || 'Siswa'}.pdf`;
-      mockSize = '1.4 MB';
-    } else if (type === 'kk') {
-      mockFileName = `KK_Keluarga_${nama.split(' ')[0] || 'Siswa'}.pdf`;
-      mockSize = '950 KB';
-    } else if (type === 'akta') {
-      mockFileName = `Akta_Lahir_${nama.replace(/\s+/g, '_') || 'Siswa'}.pdf`;
-      mockSize = '720 KB';
-    } else if (type === 'rapor') {
-      mockFileName = `Nilai_Rapor_Semester_Lalu_${nama.split(' ')[0] || 'Siswa'}.pdf`;
-      mockSize = '2.1 MB';
-    } else if (type === 'ktpAyahDoc') {
-      mockFileName = `KTP_Ayah_${namaAyah.replace(/\s+/g, '_') || 'Wali'}.jpg`;
-      mockSize = '380 KB';
-    } else if (type === 'ktpIbuDoc') {
-      mockFileName = `KTP_Ibu_${namaIbu.replace(/\s+/g, '_') || 'Wali'}.jpg`;
-      mockSize = '420 KB';
+  // Queue for files waiting to be uploaded after student creation
+  const pendingFilesRef = useRef<Map<DocKey, File>>(new Map());
+
+  // Open native file picker for a specific document type
+  const openFilePicker = (type: DocKey) => {
+    setPendingDocType(type);
+    if (fileInputRef.current) {
+      fileInputRef.current.value = ''; // reset so same file can be re-selected
+      fileInputRef.current.click();
+    }
+  };
+
+  // Handle real file selection from the OS file picker
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !pendingDocType) return;
+
+    // Validate file type (PDF or image only)
+    const allowedTypes = ['application/pdf', 'image/jpeg', 'image/jpg', 'image/png'];
+    if (!allowedTypes.includes(file.type)) {
+      onAddNotification('Format Berkas Tidak Valid', 'Hanya file PDF, JPG, atau PNG yang diterima.', 'warning');
+      return;
     }
 
+    // Format file size to human-readable
+    const sizeKB = file.size / 1024;
+    const sizeStr = sizeKB >= 1024
+      ? `${(sizeKB / 1024).toFixed(1)} MB`
+      : `${Math.round(sizeKB)} KB`;
+
+    // Always update local state immediately for UI feedback
     setDocsUploaded(prev => ({
       ...prev,
-      [type]: {
-        name: mockFileName,
-        size: mockSize,
+      [pendingDocType]: {
+        name: file.name,
+        size: sizeStr,
         status: 'Verifikasi'
       }
     }));
 
-    onAddNotification(
-      'Lampiran Berkas Diunggah',
-      `Berhasil menautkan berkas baru ${mockFileName}. Klik simpan untuk mencadangkan ke cloud.`,
-      'info'
-    );
+    // If editing existing student, upload to backend immediately
+    if (editingStudent?.id) {
+      try {
+        await uploadDocument(file, editingStudent.id, pendingDocType);
+        onAddNotification(
+          'Berkas Diunggah ke Server',
+          `${file.name} berhasil disimpan ke server arsip ARBAL.`,
+          'success'
+        );
+      } catch (err) {
+        onAddNotification(
+          'Gagal Mengunggah Berkas',
+          `File ${file.name} tersimpan lokal namun gagal diunggah ke server. Coba lagi setelah menyimpan.`,
+          'warning'
+        );
+        // Keep in pending queue as fallback
+        pendingFilesRef.current.set(pendingDocType, file);
+      }
+    } else {
+      // New student — queue file for upload after student creation
+      pendingFilesRef.current.set(pendingDocType, file);
+      onAddNotification(
+        'Lampiran Berkas Diunggah',
+        `Berkas ${file.name} siap. Akan diunggah ke server setelah data siswa disimpan.`,
+        'info'
+      );
+    }
+
+    setPendingDocType(null);
   };
 
   // Remove uploaded file
-  const handleRemoveDoc = (type: 'ijazah' | 'kk' | 'akta' | 'rapor' | 'ktpAyahDoc' | 'ktpIbuDoc') => {
+  const handleRemoveDoc = (type: DocKey) => {
+    pendingFilesRef.current.delete(type);
     setDocsUploaded(prev => ({
       ...prev,
       [type]: null
     }));
   };
 
-  // Simulate AI scan with ThinkingLevel.HIGH and models/gemini-3.1-pro-preview / Tesseract.js
-  const triggerAiScan = (type: 'kk' | 'akta' | 'ijazah' | 'ktp_ayah' | 'ktp_ibu') => {
-    setScannedDocType(type);
-    setIsScanning(true);
-    setScanProgressLogs([]);
+  // Upload all pending files — called after student is created/saved
+  const flushPendingUploads = async (studentId: string) => {
+    const entries = Array.from(pendingFilesRef.current.entries());
+    if (entries.length === 0) return;
 
-    const getLogs = () => {
-      if (type === 'ktp_ayah') {
-        return [
-          '⚡ [SISTEM]: Memutar modul OCR KTP Lokal (Tesseract.js)...',
-          '⚙️ [LOCAL-OCR]: Menginisialisasi model klasifikasi segmentasi NIK...',
-          '🔍 [OCR]: Membaca citra KTP_Ayah_Irvan_Kusuma.jpg...',
-          '📑 [OCR]: Berhasil mengurai nomor NIK "3273181803760002" & Alamat...',
-          '👤 [SISTEM]: Memetakan nama Ayah "Irvan Kusuma Maharani", Pekerjaan, No HP...',
-          '📂 [SISTEM]: Otomatis menyinkronkan draf pendaftaran kesiswaan...',
-          '🚀 [SUKSES]: Data KTP Ayah berhasil di-ekstrak lokal tanpa biaya API cloud!'
-        ];
-      } else if (type === 'ktp_ibu') {
-        return [
-          '⚡ [SISTEM]: Memutar modul OCR KTP Lokal (Tesseract.js)...',
-          '⚙️ [LOCAL-OCR]: Menginisialisasi model klasifikasi segmentasi NIK...',
-          '🔍 [OCR]: Membaca citra KTP_Ibu_Siti_Halimah.jpg...',
-          '📑 [OCR]: Berhasil mengurai nomor NIK "3273184407810003" & Alamat...',
-          '👤 [SISTEM]: Memetakan nama Ibu "Siti Halimah", Pekerjaan "Ibu Rumah Tangga"...',
-          '📂 [SISTEM]: Otomatis menyinkronkan draf pendaftaran kesiswaan...',
-          '🚀 [SUKSES]: Data KTP Ibu berhasil di-ekstrak lokal tanpa biaya API cloud!'
-        ];
-      } else {
-        return [
-          '⚡ [SISTEM]: Membuat sesi penawaran model cerdas @google/genai (gemini-3.1-pro-preview)...',
-          '⚙️ [AI]: Mengaktifkan Pemikiran Intensitas Tinggi (ThinkingLevel.HIGH)...',
-          '🔍 [AI]: Memindai struktur metadata dokumen ' + type.toUpperCase() + '...',
-          '🎓 [AI]: Menemukan kesesuaian penanda PKBM Teknologi Mustaqbal...',
-          '📑 [AI]: Melakukan Optical Character Recognition (OCR) pada formulir arsip...',
-          '👤 [AI]: Mengekstrak Identitas Siswa beserta Nama Orang Tua & Pekerjaan...',
-          '📂 [AI]: Melacak relasi data kependudukan dan memvalidasi nomor telepon...',
-          '🚀 [SUKSES]: Integrasi berhasil memetakan 14 bidang data kependudukan lengkap!'
-        ];
+    for (const [docKey, file] of entries) {
+      try {
+        await uploadDocument(file, studentId, docKey);
+      } catch {
+        // Silent fail — file stays in local state
       }
-    };
-
-    const scanLogs = getLogs();
-
-    let count = 0;
-    const interval = setInterval(() => {
-      if (count < scanLogs.length) {
-        setScanProgressLogs(prev => [...prev, scanLogs[count]]);
-        count++;
-      } else {
-        clearInterval(interval);
-        setTimeout(() => {
-          if (type === 'kk') {
-            setNama('Zahra Kirana Maharani');
-            setNisn('0094827184');
-            setKelas('X-B');
-            setJurusan('Rekayasa Perangkat Lunak');
-            setEmail('zahra.kirana@siswa.sch.id');
-            setTelepon('089912345678');
-            setAlamat('Perumahan Cigadung Elok Blok D-22, Coblong, Bandung');
-            setTanggalLahir('2010-04-14');
-            setStatus('Aktif');
-            setCatatan('Data diisi otomatis via ARBAL Gemini AI Scanner (Kartu Keluarga)');
-
-            // Parents info filled
-            setNamaAyah('Irvan Kusuma Maharani');
-            setPekerjaanAyah('Karyawan Swasta');
-            setKtpAyah('3273181803760002');
-            setTeleponAyah('089987654311');
-            setNamaIbu('Siti Halimah');
-            setPekerjaanIbu('Ibu Rumah Tangga');
-            setKtpIbu('3273184407810003');
-            setTeleponIbu('089912123434');
-            setTeleponOrangTua('089987654311');
-            setAlamatOrangTua('Perumahan Cigadung Elok Blok D-22, Coblong, Bandung');
-
-            // Attach KK document
-            setDocsUploaded(prev => ({
-              ...prev,
-              kk: { name: 'KK_Zahra_Kirana_Bandung.pdf', size: '1.2 MB', status: 'Verifikasi' }
-            }));
-
-          } else if (type === 'akta') {
-            setNama('Ade Bagus Saputra');
-            setNisn('0091122334');
-            setKelas('X-A');
-            setJurusan('Teknik Jaringan Komputer');
-            setEmail('ade.bagus@siswa.sch.id');
-            setTelepon('081122334455');
-            setAlamat('Jl. Cisitu Indah No. 10B, Dago, Bandung');
-            setTanggalLahir('2010-08-19');
-            setStatus('Aktif');
-            setCatatan('Data diisi otomatis via ARBAL Gemini AI Scanner (Akta Kelahiran)');
-
-            // Parents
-            setNamaAyah('Suryanto Saputra');
-            setPekerjaanAyah('PNS / Guru');
-            setKtpAyah('3273121010720001');
-            setTeleponAyah('08119876542');
-            setNamaIbu('Endang Lestari');
-            setPekerjaanIbu('Wiraswasta');
-            setKtpIbu('3273125211750005');
-            setTeleponIbu('08119876543');
-            setTeleponOrangTua('08119876542');
-            setAlamatOrangTua('Jl. Cisitu Indah No. 10B, Dago, Bandung');
-
-            // Attach Akta document
-            setDocsUploaded(prev => ({
-              ...prev,
-              akta: { name: 'Akta_Lahir_Ade_Bagus.pdf', size: '780 KB', status: 'Verifikasi' }
-            }));
-
-          } else if (type === 'ijazah') {
-            setNama('Kevin Austin Pratama');
-            setNisn('0083344556');
-            setKelas('XII RPL 1');
-            setJurusan('Rekayasa Perangkat Lunak');
-            setEmail('kevin.austin@siswa.sch.id');
-            setTelepon('085566778899');
-            setAlamat('Pondok Hijau Indah Blok H No. 4, Geger Kalong, Bandung');
-            setTanggalLahir('2009-02-28');
-            setStatus('Aktif');
-            setCatatan('Data diisi otomatis via ARBAL Gemini AI Scanner (Ijazah Kelulusan)');
-
-            // Parents
-            setNamaAyah('Stefanus Pratama');
-            setPekerjaanAyah('Wiraswasta');
-            setKtpAyah('3273151505740003');
-            setTeleponAyah('08552233445');
-            setNamaIbu('Clara Austin');
-            setPekerjaanIbu('Dosen');
-            setKtpIbu('3273154810780002');
-            setTeleponIbu('08556677889');
-            setTeleponOrangTua('08552233445');
-            setAlamatOrangTua('Pondok Hijau Indah Blok H No. 4, Geger Kalong, Bandung');
-
-            // Attach Ijazah and Rapor document
-            setDocsUploaded(prev => ({
-              ...prev,
-              ijazah: { name: 'Ijazah_SMP_Kevin_Austin.pdf', size: '1.4 MB', status: 'Verifikasi' },
-              rapor: { name: 'Rapor_SMP_Smt5_Kevin.pdf', size: '2.3 MB', status: 'Verifikasi' }
-            }));
-          } else if (type === 'ktp_ayah') {
-            // Fill father details specifically
-            setNamaAyah('Irvan Kusuma Maharani');
-            setPekerjaanAyah('Karyawan Swasta');
-            setKtpAyah('3273181803760002');
-            setTeleponAyah('089987654311');
-            setTeleponOrangTua('089987654311');
-            setAlamatOrangTua('Perumahan Cigadung Elok Blok D-22, Coblong, Bandung');
-
-            // Attach KTP Ayah document
-            setDocsUploaded(prev => ({
-              ...prev,
-              ktpAyahDoc: { name: 'KTP_Ayah_Irvan_Kusuma.jpg', size: '380 KB', status: 'Verifikasi' }
-            }));
-          } else if (type === 'ktp_ibu') {
-            // Fill mother details specifically
-            setNamaIbu('Siti Halimah');
-            setPekerjaanIbu('Ibu Rumah Tangga');
-            setKtpIbu('3273184407810003');
-            setTeleponIbu('089912123434');
-            setAlamatOrangTua('Perumahan Cigadung Elok Blok D-22, Coblong, Bandung');
-
-            // Attach KTP Ibu document
-            setDocsUploaded(prev => ({
-              ...prev,
-              ktpIbuDoc: { name: 'KTP_Ibu_Siti_Halimah.jpg', size: '420 KB', status: 'Verifikasi' }
-            }));
-          }
-
-          setIsScanning(false);
-          setShowAiScanner(false);
-          setFlashFields(true);
-          setActiveTab('orangtua'); // Switch to let parents info be verified
-
-          onAddLog(
-            'Pemindaian AI',
-            'Siswa',
-            `Melakukan ekstraksi berkas ${type.toUpperCase()} menggunakan modul OCR lokal untuk melengkapi arsip.`
-          );
-
-          onAddNotification(
-            'Auto-Fill OCR Sukses',
-            `Data bidang kependudukan dari berkas berhasil diekstrak otomatis! Silakan tinjau tab Orang Tua.`,
-            'success'
-          );
-
-          // Clear flash after 2 seconds
-          setTimeout(() => setFlashFields(false), 2000);
-        }, 800);
-      }
-    }, 400);
+    }
+    pendingFilesRef.current.clear();
   };
+
+  // Expose flushPendingUploads for parent to call after student creation
+  useEffect(() => {
+    (window as any).__arbalFlushUploads = flushPendingUploads;
+    return () => { delete (window as any).__arbalFlushUploads; };
+  });
 
   return (
     <div id="student-form-view" className="space-y-6">
+      
+      {/* Hidden native file input — triggered by openFilePicker() */}
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept=".pdf,.jpg,.jpeg,.png"
+        className="hidden"
+        onChange={handleFileChange}
+      />
       
       {/* Header Navigasi */}
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
@@ -540,11 +402,11 @@ export default function StudentFormView({
           <button
             id="btn-open-scanner"
             type="button"
-            onClick={() => setShowAiScanner(true)}
+            onClick={() => onAddNotification('OCR Dalam Pengembangan', 'Fitur OCR AI akan segera hadir. Saat ini Anda dapat mengunggah dokumen secara manual.', 'info')}
             className="flex items-center space-x-2 bg-slate-900 border border-slate-700 hover:bg-slate-800 text-slate-100 font-bold text-xs px-3.5 py-2.5 rounded-lg shadow-md transition shrink-0"
           >
-            <BrainCircuit size={15} className="text-emerald-400" />
-            <span>Isi Otomatis via AI Scanner</span>
+            <RefreshCw size={15} className="text-emerald-400" />
+            <span>OCR AI (Segera Hadir)</span>
           </button>
         )}
       </div>
@@ -625,7 +487,7 @@ export default function StudentFormView({
                     value={nama}
                     onChange={(e) => setNama(e.target.value)}
                     className={`w-full bg-slate-50 text-slate-800 placeholder-slate-400 text-xs px-3.5 py-2.5 rounded-lg border focus:outline-none focus:border-emerald-500 transition ${
-                      flashFields ? 'border-emerald-500 bg-emerald-50 animate-pulse' : 'border-slate-200'
+                      'border-slate-200'
                     }`}
                     required
                   />
@@ -642,7 +504,7 @@ export default function StudentFormView({
                     value={nisn}
                     onChange={(e) => setNisn(e.target.value.replace(/\D/g, ''))}
                     className={`w-full bg-slate-50 text-slate-800 placeholder-slate-400 text-xs px-3.5 py-2.5 rounded-lg border focus:outline-none focus:border-emerald-500 transition ${
-                      flashFields ? 'border-emerald-500 bg-emerald-50 animate-pulse' : 'border-slate-200'
+                      'border-slate-200'
                     }`}
                     required
                   />
@@ -657,7 +519,7 @@ export default function StudentFormView({
                     value={tanggalLahir}
                     onChange={(e) => setTanggalLahir(e.target.value)}
                     className={`w-full bg-slate-50 text-slate-800 text-xs px-3.5 py-2.5 rounded-lg border focus:outline-none focus:border-emerald-500 transition ${
-                      flashFields ? 'border-emerald-500 bg-emerald-50 animate-pulse' : 'border-slate-200'
+                      'border-slate-200'
                     }`}
                     required
                   />
@@ -673,7 +535,7 @@ export default function StudentFormView({
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
                     className={`w-full bg-slate-50 text-slate-800 placeholder-slate-400 text-xs px-3.5 py-2.5 rounded-lg border focus:outline-none focus:border-emerald-500 transition ${
-                      flashFields ? 'border-emerald-500 bg-emerald-50 animate-pulse' : 'border-slate-200'
+                      'border-slate-200'
                     }`}
                     required
                   />
@@ -689,7 +551,7 @@ export default function StudentFormView({
                     value={telepon}
                     onChange={(e) => setTelepon(e.target.value.replace(/\D/g, ''))}
                     className={`w-full bg-slate-50 text-slate-800 placeholder-slate-400 text-xs px-3.5 py-2.5 rounded-lg border focus:outline-none focus:border-emerald-500 transition ${
-                      flashFields ? 'border-emerald-500 bg-emerald-50 animate-pulse' : 'border-slate-200'
+                      'border-slate-200'
                     }`}
                   />
                 </div>
@@ -755,7 +617,7 @@ export default function StudentFormView({
                     value={alamat}
                     onChange={(e) => setAlamat(e.target.value)}
                     className={`w-full bg-slate-50 text-slate-800 placeholder-slate-400 text-xs px-3.5 py-2.5 rounded-lg border focus:outline-none focus:border-emerald-500 transition ${
-                      flashFields ? 'border-emerald-500 bg-emerald-50 animate-pulse' : 'border-slate-200'
+                      'border-slate-200'
                     }`}
                     required
                   />
@@ -814,7 +676,7 @@ export default function StudentFormView({
                         value={namaAyah}
                         onChange={(e) => setNamaAyah(e.target.value)}
                         className={`w-full bg-white text-slate-800 text-xs px-3 py-2.5 rounded-lg border focus:outline-none focus:border-emerald-500 transition ${
-                          flashFields ? 'border-emerald-500 bg-emerald-50 animate-pulse' : 'border-slate-200'
+                          'border-slate-200'
                         }`}
                       />
                     </div>
@@ -826,7 +688,7 @@ export default function StudentFormView({
                         value={pekerjaanAyah}
                         onChange={(e) => setPekerjaanAyah(e.target.value)}
                         className={`w-full bg-white text-slate-800 text-xs px-3 py-2.5 rounded-lg border focus:outline-none focus:border-emerald-500 transition ${
-                          flashFields ? 'border-emerald-500 bg-emerald-50 animate-pulse' : 'border-slate-200'
+                          'border-slate-200'
                         }`}
                       />
                     </div>
@@ -839,7 +701,7 @@ export default function StudentFormView({
                         value={ktpAyah}
                         onChange={(e) => setKtpAyah(e.target.value.replace(/\D/g, ''))}
                         className={`w-full bg-white text-slate-800 text-xs px-3 py-2.5 rounded-lg border focus:outline-none focus:border-emerald-500 transition ${
-                          flashFields ? 'border-emerald-500 bg-emerald-50 animate-pulse' : 'border-slate-200'
+                          'border-slate-200'
                         }`}
                       />
                     </div>
@@ -851,7 +713,7 @@ export default function StudentFormView({
                         value={teleponAyah}
                         onChange={(e) => setTeleponAyah(e.target.value.replace(/\D/g, ''))}
                         className={`w-full bg-white text-slate-800 text-xs px-3 py-2.5 rounded-lg border focus:outline-none focus:border-emerald-500 transition ${
-                          flashFields ? 'border-emerald-500 bg-emerald-50 animate-pulse' : 'border-slate-200'
+                          'border-slate-200'
                         }`}
                       />
                     </div>
@@ -874,7 +736,7 @@ export default function StudentFormView({
                         value={namaIbu}
                         onChange={(e) => setNamaIbu(e.target.value)}
                         className={`w-full bg-white text-slate-800 text-xs px-3 py-2.5 rounded-lg border focus:outline-none focus:border-emerald-500 transition ${
-                          flashFields ? 'border-emerald-500 bg-emerald-50 animate-pulse' : 'border-slate-200'
+                          'border-slate-200'
                         }`}
                       />
                     </div>
@@ -886,7 +748,7 @@ export default function StudentFormView({
                         value={pekerjaanIbu}
                         onChange={(e) => setPekerjaanIbu(e.target.value)}
                         className={`w-full bg-white text-slate-800 text-xs px-3 py-2.5 rounded-lg border focus:outline-none focus:border-emerald-500 transition ${
-                          flashFields ? 'border-emerald-500 bg-emerald-50 animate-pulse' : 'border-slate-200'
+                          'border-slate-200'
                         }`}
                       />
                     </div>
@@ -899,7 +761,7 @@ export default function StudentFormView({
                         value={ktpIbu}
                         onChange={(e) => setKtpIbu(e.target.value.replace(/\D/g, ''))}
                         className={`w-full bg-white text-slate-800 text-xs px-3 py-2.5 rounded-lg border focus:outline-none focus:border-emerald-500 transition ${
-                          flashFields ? 'border-emerald-500 bg-emerald-50 animate-pulse' : 'border-slate-200'
+                          'border-slate-200'
                         }`}
                       />
                     </div>
@@ -911,7 +773,7 @@ export default function StudentFormView({
                         value={teleponIbu}
                         onChange={(e) => setTeleponIbu(e.target.value.replace(/\D/g, ''))}
                         className={`w-full bg-white text-slate-800 text-xs px-3 py-2.5 rounded-lg border focus:outline-none focus:border-emerald-500 transition ${
-                          flashFields ? 'border-emerald-500 bg-emerald-50 animate-pulse' : 'border-slate-200'
+                          'border-slate-200'
                         }`}
                       />
                     </div>
@@ -929,7 +791,7 @@ export default function StudentFormView({
                     value={teleponOrangTua}
                     onChange={(e) => setTeleponOrangTua(e.target.value.replace(/\D/g, ''))}
                     className={`w-full bg-slate-50 text-slate-800 text-xs px-3.5 py-2.5 rounded-lg border focus:outline-none focus:border-emerald-500 transition ${
-                      flashFields ? 'border-emerald-500 bg-emerald-50 animate-pulse' : 'border-slate-200'
+                      'border-slate-200'
                     }`}
                   />
                 </div>
@@ -942,7 +804,7 @@ export default function StudentFormView({
                     value={alamatOrangTua}
                     onChange={(e) => setAlamatOrangTua(e.target.value)}
                     className={`w-full bg-slate-50 text-slate-800 text-xs px-3.5 py-2.5 rounded-lg border focus:outline-none focus:border-emerald-500 transition ${
-                      flashFields ? 'border-emerald-500 bg-emerald-50 animate-pulse' : 'border-slate-200'
+                      'border-slate-200'
                     }`}
                   />
                 </div>
@@ -1022,7 +884,7 @@ export default function StudentFormView({
                   ) : (
                     <button
                       type="button"
-                      onClick={() => handleSimulateUpload('kk')}
+                      onClick={() => openFilePicker('kk')}
                       className="border-2 border-dashed border-slate-200 hover:border-emerald-500 bg-slate-50 hover:bg-emerald-50/10 p-5 rounded-xl transition flex flex-col items-center justify-center text-center space-y-1 cursor-pointer"
                     >
                       <UploadCloud size={20} className="text-slate-400" />
@@ -1074,7 +936,7 @@ export default function StudentFormView({
                   ) : (
                     <button
                       type="button"
-                      onClick={() => handleSimulateUpload('akta')}
+                      onClick={() => openFilePicker('akta')}
                       className="border-2 border-dashed border-slate-200 hover:border-emerald-500 bg-slate-50 hover:bg-emerald-50/10 p-5 rounded-xl transition flex flex-col items-center justify-center text-center space-y-1 cursor-pointer"
                     >
                       <UploadCloud size={20} className="text-slate-400" />
@@ -1126,7 +988,7 @@ export default function StudentFormView({
                   ) : (
                     <button
                       type="button"
-                      onClick={() => handleSimulateUpload('rapor')}
+                      onClick={() => openFilePicker('rapor')}
                       className="border-2 border-dashed border-slate-200 hover:border-emerald-500 bg-slate-50 hover:bg-emerald-50/10 p-5 rounded-xl transition flex flex-col items-center justify-center text-center space-y-1 cursor-pointer"
                     >
                       <UploadCloud size={20} className="text-slate-400" />
@@ -1178,7 +1040,7 @@ export default function StudentFormView({
                   ) : (
                     <button
                       type="button"
-                      onClick={() => handleSimulateUpload('ijazah')}
+                      onClick={() => openFilePicker('ijazah')}
                       className="border-2 border-dashed border-slate-200 hover:border-emerald-500 bg-slate-50 hover:bg-emerald-50/10 p-5 rounded-xl transition flex flex-col items-center justify-center text-center space-y-1 cursor-pointer"
                     >
                       <UploadCloud size={20} className="text-slate-400" />
@@ -1230,7 +1092,7 @@ export default function StudentFormView({
                   ) : (
                     <button
                       type="button"
-                      onClick={() => handleSimulateUpload('ktpAyahDoc')}
+                      onClick={() => openFilePicker('ktpAyahDoc')}
                       className="border-2 border-dashed border-slate-200 hover:border-emerald-500 bg-slate-50 hover:bg-emerald-50/10 p-5 rounded-xl transition flex flex-col items-center justify-center text-center space-y-1 cursor-pointer"
                     >
                       <UploadCloud size={20} className="text-slate-400" />
@@ -1282,7 +1144,7 @@ export default function StudentFormView({
                   ) : (
                     <button
                       type="button"
-                      onClick={() => handleSimulateUpload('ktpIbuDoc')}
+                      onClick={() => openFilePicker('ktpIbuDoc')}
                       className="border-2 border-dashed border-slate-200 hover:border-emerald-500 bg-slate-50 hover:bg-emerald-50/10 p-5 rounded-xl transition flex flex-col items-center justify-center text-center space-y-1 cursor-pointer"
                     >
                       <UploadCloud size={20} className="text-slate-400" />
@@ -1332,165 +1194,6 @@ export default function StudentFormView({
         </form>
       </div>
 
-      {/* MODAL WINDOWS: AI AUTOSCAN POPUP */}
-      {showAiScanner && (
-        <div id="ai-scanner-modal" className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center z-50">
-          <div className="w-full max-w-lg bg-white rounded-2xl border border-slate-200 shadow-2xl relative p-6 space-y-4">
-            
-            {/* Modal Header */}
-            <div className="flex items-center justify-between">
-              <div className="flex items-center space-x-2">
-                <BrainCircuit className="text-emerald-500" size={22} />
-                <h3 className="text-base font-extrabold text-slate-800">Gemini AI Document Auto-Extractor</h3>
-              </div>
-              <button 
-                id="btn-close-scanner"
-                onClick={() => setShowAiScanner(false)}
-                disabled={isScanning}
-                className="text-slate-400 hover:text-slate-600 font-bold"
-              >
-                <X size={18} />
-              </button>
-            </div>
-
-            {/* Modal Content description */}
-            <div className="text-xs text-slate-600 leading-relaxed bg-slate-50 p-4 rounded-xl border border-slate-100 space-y-2">
-              <p>
-                Fitur ini mensimulasikan integrasi tingkat tinggi menggunakan model cerdas <strong className="text-emerald-600">gemini-3.1-pro-preview</strong> yang dikonfigurasi dengan <strong className="text-emerald-600">ThinkingLevel.HIGH</strong>.
-              </p>
-              <p>
-                Sistem akan memindai berkas digital pendaftaran (Kartu Keluarga, Akta, Ijazah), menalar struktur letak data pendaftar, lalu mengisi formulir registrasi utama secara instan.
-              </p>
-            </div>
-
-            {/* Choice of mock files to scan */}
-            {!isScanning ? (
-              <div className="space-y-3">
-                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">PILIH SAMPEL DOKUMEN PINDAIAN</p>
-                
-                <div className="grid grid-cols-1 gap-2.5 text-xs">
-                  {/* Option 1 */}
-                  <button
-                    id="scan-option-kk"
-                    onClick={() => triggerAiScan('kk')}
-                    className="flex items-center justify-between p-3 border border-slate-200 rounded-xl hover:bg-slate-50 text-left transition hover:border-emerald-500 cursor-pointer"
-                  >
-                    <div className="flex items-center space-x-3">
-                      <div className="bg-blue-50 text-blue-500 p-2 rounded-lg">
-                        <FileSearch2 size={16} />
-                      </div>
-                      <div>
-                        <p className="font-bold text-slate-800">KK_Zahra_Bandung.jpg</p>
-                        <p className="text-[10px] text-slate-400 mt-0.5">Berkas scan Kartu Keluarga resmi Jawa Barat.</p>
-                      </div>
-                    </div>
-                    <Sparkles size={14} className="text-emerald-500 shrink-0" />
-                  </button>
-
-                  {/* Option 2 */}
-                  <button
-                    id="scan-option-akta"
-                    onClick={() => triggerAiScan('akta')}
-                    className="flex items-center justify-between p-3 border border-slate-200 rounded-xl hover:bg-slate-50 text-left transition hover:border-emerald-500 cursor-pointer"
-                  >
-                    <div className="flex items-center space-x-3">
-                      <div className="bg-amber-50 text-amber-500 p-2 rounded-lg">
-                        <FileSearch2 size={16} />
-                      </div>
-                      <div>
-                        <p className="font-bold text-slate-800">Akta_Lahir_Ade_Saputra.pdf</p>
-                        <p className="text-[10px] text-slate-400 mt-0.5">Berkas scan Akta Kelahiran resmi cap basah.</p>
-                      </div>
-                    </div>
-                    <Sparkles size={14} className="text-emerald-500 shrink-0" />
-                  </button>
-
-                  {/* Option 3 */}
-                  <button
-                    id="scan-option-ijazah"
-                    onClick={() => triggerAiScan('ijazah')}
-                    className="flex items-center justify-between p-3 border border-slate-200 rounded-xl hover:bg-slate-50 text-left transition hover:border-emerald-500 cursor-pointer"
-                  >
-                    <div className="flex items-center space-x-3">
-                      <div className="bg-purple-50 text-purple-500 p-2 rounded-lg">
-                        <FileSearch2 size={16} />
-                      </div>
-                      <div>
-                        <p className="font-bold text-slate-800">Ijazah_SMP_Kevin.pdf</p>
-                        <p className="text-[10px] text-slate-400 mt-0.5">Berkas scan Ijazah kelulusan tingkat SMP.</p>
-                      </div>
-                    </div>
-                    <Sparkles size={14} className="text-emerald-500 shrink-0" />
-                  </button>
-
-                  {/* Option 4 */}
-                  <button
-                    id="scan-option-ktpayah"
-                    onClick={() => triggerAiScan('ktp_ayah')}
-                    className="flex items-center justify-between p-3 border border-slate-200 rounded-xl hover:bg-slate-50 text-left transition hover:border-emerald-500 cursor-pointer"
-                  >
-                    <div className="flex items-center space-x-3">
-                      <div className="bg-sky-50 text-sky-500 p-2 rounded-lg">
-                        <FileSearch2 size={16} />
-                      </div>
-                      <div>
-                        <p className="font-bold text-slate-800">KTP_Ayah_Irvan_Kusuma.jpg</p>
-                        <p className="text-[10px] text-slate-400 mt-0.5">Membaca KTP Ayah resmi dengan OCR Tesseract.js lokal.</p>
-                      </div>
-                    </div>
-                    <Sparkles size={14} className="text-emerald-500 shrink-0" />
-                  </button>
-
-                  {/* Option 5 */}
-                  <button
-                    id="scan-option-ktpibu"
-                    onClick={() => triggerAiScan('ktp_ibu')}
-                    className="flex items-center justify-between p-3 border border-slate-200 rounded-xl hover:bg-slate-50 text-left transition hover:border-emerald-500 cursor-pointer"
-                  >
-                    <div className="flex items-center space-x-3">
-                      <div className="bg-pink-50 text-pink-500 p-2 rounded-lg">
-                        <FileSearch2 size={16} />
-                      </div>
-                      <div>
-                        <p className="font-bold text-slate-800">KTP_Ibu_Siti_Halimah.jpg</p>
-                        <p className="text-[10px] text-slate-400 mt-0.5">Membaca KTP Ibu resmi dengan OCR Tesseract.js lokal.</p>
-                      </div>
-                    </div>
-                    <Sparkles size={14} className="text-emerald-500 shrink-0" />
-                  </button>
-                </div>
-              </div>
-            ) : (
-              /* Scanning Status & Terminal Log Output */
-              <div className="space-y-4">
-                {/* Loader animated orb */}
-                <div className="flex flex-col items-center justify-center p-4">
-                  <div className="relative flex items-center justify-center">
-                    <div className="w-16 h-16 rounded-full border-4 border-slate-200 border-t-emerald-500 animate-spin" />
-                    <Sparkles className="absolute text-emerald-500 animate-pulse" size={24} />
-                  </div>
-                  <p className="text-xs font-bold text-slate-700 mt-3 animate-pulse">Menghubungkan & Menalar via Gemini AI...</p>
-                </div>
-
-                {/* Progress Log Monitor (Terminal Interface) */}
-                <div className="bg-slate-900 border border-slate-800 rounded-xl p-3.5 font-mono text-[10px] text-slate-300 h-44 overflow-y-auto space-y-1">
-                  {scanProgressLogs.map((logStr, index) => (
-                    <div key={index} className="leading-relaxed">
-                      {logStr}
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* Simulated footer with API info */}
-            <div className="text-[10.5px] text-slate-400 text-center flex items-center justify-center gap-1.5 pt-2 border-t border-slate-100 font-medium">
-              <CheckCircle2 size={12} className="text-emerald-500" />
-              <span>Thinking Mode: High, 100% Secure Enclave.</span>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }

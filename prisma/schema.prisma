@@ -1,0 +1,150 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+/// This table has subclasses and requires additional setup for migrations. Visit https://pris.ly/d/table-inheritance for more info.
+model ActivityLog {
+  id          String
+  actorUserId String
+  action      String
+  category    LogCategory
+  entityType  String
+  entityId    String?
+  details     String
+  createdAt   DateTime    @default(now())
+  User        User        @relation(fields: [actorUserId], references: [id])
+
+  @@id([id, createdAt])
+  @@index([createdAt(sort: Desc)])
+  @@index([actorUserId])
+  @@index([category])
+}
+
+model Document {
+  id           String         @id
+  studentId    String
+  uploadedById String
+  type         DocumentType
+  originalName String
+  storedName   String
+  mimeType     String
+  sizeBytes    Int
+  status       DocumentStatus @default(VERIFIKASI)
+  storagePath  String
+  ocrResult    Json?
+  ocrStatus    OcrStatus      @default(PENDING)
+  ocrRunAt     DateTime?
+  uploadedAt   DateTime       @default(now())
+  Student      Student        @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  User         User           @relation(fields: [uploadedById], references: [id])
+
+  @@index([studentId])
+  @@index([status])
+}
+
+model Guardian {
+  id              String  @id
+  studentId       String  @unique
+  namaAyah        String?
+  pekerjaanAyah   String?
+  ktpAyah         String?
+  teleponAyah     String?
+  namaIbu         String?
+  pekerjaanIbu    String?
+  ktpIbu          String?
+  teleponIbu      String?
+  teleponOrangTua String?
+  alamatOrangTua  String?
+  Student         Student @relation(fields: [studentId], references: [id], onDelete: Cascade)
+}
+
+model Role {
+  id   String   @id
+  name RoleName @unique
+  User User[]
+}
+
+model Student {
+  id           String        @id
+  nisn         String        @unique
+  nama         String
+  kelas        String
+  jurusan      String
+  email        String
+  telepon      String
+  alamat       String
+  tanggalLahir DateTime
+  status       StudentStatus @default(AKTIF)
+  catatan      String?
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+  Document     Document[]
+  Guardian     Guardian?
+
+  @@index([kelas])
+  @@index([status])
+  @@index([jurusan])
+}
+
+model User {
+  id           String        @id
+  name         String
+  email        String        @unique
+  passwordHash String
+  isActive     Boolean       @default(true)
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+  roleId       String
+  ActivityLog  ActivityLog[]
+  Document     Document[]
+  Role         Role          @relation(fields: [roleId], references: [id])
+
+  @@index([roleId])
+}
+
+enum DocumentStatus {
+  TERARSIP
+  VERIFIKASI
+  DITOLAK
+}
+
+enum OcrStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+enum DocumentType {
+  IJAZAH
+  KARTU_KELUARGA
+  AKTA_KELAHIRAN
+  PAS_FOTO
+  RAPOR
+  KTP_AYAH
+  KTP_IBU
+}
+
+enum LogCategory {
+  SISWA
+  DOKUMEN
+  HAK_AKSES
+  AUTENTIKASI
+}
+
+enum RoleName {
+  SUPER_ADMIN
+  STAFF_TU
+  GURU
+}
+
+enum StudentStatus {
+  AKTIF
+  ALUMNI
+  PINDAHAN
+  NON_AKTIF
+}

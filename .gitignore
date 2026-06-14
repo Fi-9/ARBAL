@@ -6,3 +6,9 @@ coverage/
 *.log
 .env*
 !.env.example
+
+/src/generated/prisma
+
+# Uploaded files (local storage)
+backend/uploads/*
+!backend/uploads/.gitkeep

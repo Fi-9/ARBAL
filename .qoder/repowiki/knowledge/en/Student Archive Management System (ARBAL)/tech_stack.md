@@ -1,0 +1,4 @@
+- **Frontend Framework**: React 19 with Vite 6 build tooling.
+- **UI & Icons**: Tailwind CSS v4 for styling and Lucide React for iconography.
+- **Data Visualization**: Recharts for dashboard analytics (pie/bar charts).
+- **AI Integration**: `@google/genai` SDK for simulated OCR and data extraction features.

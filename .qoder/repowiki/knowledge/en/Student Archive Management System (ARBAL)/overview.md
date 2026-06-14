@@ -1,0 +1,1 @@
+A role-based student archive management application featuring document verification, AI-driven data extraction, and simulated Google Workspace integration.

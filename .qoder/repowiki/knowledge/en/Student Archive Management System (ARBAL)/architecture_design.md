@@ -1,0 +1,5 @@
+- **Entry Point**: `src/main.tsx` bootstraps the React application into the DOM.
+- **Core Orchestrator**: `src/App.tsx` acts as the central state manager, holding student data, activity logs, and notifications in React state, while managing view routing via `currentView`.
+- **Component Structure**: The UI is divided into a persistent `Sidebar` for navigation and a dynamic main area rendering specific views (`DashboardView`, `StudentDirectoryView`, `StudentFormView`, etc.).
+- **Data Layer**: Uses a local mock data layer (`src/mockData.ts`) and TypeScript interfaces (`src/types.ts`) to simulate a backend, with state updates propagated via props.
+- **Styling**: Utilizes Tailwind CSS v4 via the `@tailwindcss/vite` plugin for utility-first styling.
