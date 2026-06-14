@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-export type DocumentType = 'Ijazah' | 'Kartu Keluarga' | 'Akta Kelahiran' | 'Pas Foto' | 'Rapor';
+export type DocumentType = 'Ijazah' | 'Kartu Keluarga' | 'Akta Kelahiran' | 'Pas Foto' | 'Rapor' | 'KTP Ayah' | 'KTP Ibu';
 
 export interface DocumentItem {
   id: string;

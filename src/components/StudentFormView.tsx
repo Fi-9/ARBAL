@@ -70,24 +70,28 @@ export default function StudentFormView({
   const [teleponOrangTua, setTeleponOrangTua] = useState('');
   const [alamatOrangTua, setAlamatOrangTua] = useState('');
 
-  // Form States - Tab 3: Upload Dokumen (KK, Akta Kelahiran, Nilai Rapor, Ijazah)
+  // Form States - Tab 3: Upload Dokumen (KK, Akta Kelahiran, Nilai Rapor, Ijazah, KTP Ayah, KTP Ibu)
   const [docsUploaded, setDocsUploaded] = useState<{
     ijazah: { name: string; size: string; status: 'Terarsip' | 'Verifikasi' } | null;
     kk: { name: string; size: string; status: 'Terarsip' | 'Verifikasi' } | null;
     akta: { name: string; size: string; status: 'Terarsip' | 'Verifikasi' } | null;
     rapor: { name: string; size: string; status: 'Terarsip' | 'Verifikasi' } | null;
+    ktpAyahDoc: { name: string; size: string; status: 'Terarsip' | 'Verifikasi' } | null;
+    ktpIbuDoc: { name: string; size: string; status: 'Terarsip' | 'Verifikasi' } | null;
   }>({
     ijazah: null,
     kk: null,
     akta: null,
     rapor: null,
+    ktpAyahDoc: null,
+    ktpIbuDoc: null,
   });
 
   // Scanning simulation state
   const [showAiScanner, setShowAiScanner] = useState(false);
   const [isScanning, setIsScanning] = useState(false);
   const [scanProgressLogs, setScanProgressLogs] = useState<string[]>([]);
-  const [scannedDocType, setScannedDocType] = useState<'kk' | 'akta' | 'ijazah'>('kk');
+  const [scannedDocType, setScannedDocType] = useState<'kk' | 'akta' | 'ijazah' | 'ktp_ayah' | 'ktp_ibu'>('kk');
   const [flashFields, setFlashFields] = useState(false);
 
   // Initialize form if editing
@@ -121,7 +125,9 @@ export default function StudentFormView({
         ijazah: null as any,
         kk: null as any,
         akta: null as any,
-        rapor: null as any
+        rapor: null as any,
+        ktpAyahDoc: null as any,
+        ktpIbuDoc: null as any
       };
 
       editingStudent.documents.forEach(doc => {
@@ -133,6 +139,10 @@ export default function StudentFormView({
           loadedDocs.akta = { name: doc.name, size: doc.size, status: doc.status };
         } else if (doc.type === 'Rapor') {
           loadedDocs.rapor = { name: doc.name, size: doc.size, status: doc.status };
+        } else if (doc.type === 'KTP Ayah') {
+          loadedDocs.ktpAyahDoc = { name: doc.name, size: doc.size, status: doc.status };
+        } else if (doc.type === 'KTP Ibu') {
+          loadedDocs.ktpIbuDoc = { name: doc.name, size: doc.size, status: doc.status };
         }
       });
       setDocsUploaded(loadedDocs);
@@ -161,7 +171,7 @@ export default function StudentFormView({
       setTeleponOrangTua('');
       setAlamatOrangTua('');
 
-      setDocsUploaded({ ijazah: null, kk: null, akta: null, rapor: null });
+      setDocsUploaded({ ijazah: null, kk: null, akta: null, rapor: null, ktpAyahDoc: null, ktpIbuDoc: null });
       setActiveTab('siswa');
     }
   }, [editingStudent]);
@@ -178,11 +188,13 @@ export default function StudentFormView({
     const existingDocuments = editingStudent?.documents || [];
     const updatedDocumentsList: DocumentItem[] = [...existingDocuments];
 
-    const currentDocKeys: { key: 'ijazah' | 'kk' | 'akta' | 'rapor'; docType: DocumentType }[] = [
+    const currentDocKeys: { key: 'ijazah' | 'kk' | 'akta' | 'rapor' | 'ktpAyahDoc' | 'ktpIbuDoc'; docType: DocumentType }[] = [
       { key: 'ijazah', docType: 'Ijazah' },
       { key: 'kk', docType: 'Kartu Keluarga' },
       { key: 'akta', docType: 'Akta Kelahiran' },
-      { key: 'rapor', docType: 'Rapor' }
+      { key: 'rapor', docType: 'Rapor' },
+      { key: 'ktpAyahDoc', docType: 'KTP Ayah' },
+      { key: 'ktpIbuDoc', docType: 'KTP Ibu' }
     ];
 
     currentDocKeys.forEach(({ key, docType }) => {
@@ -258,7 +270,7 @@ export default function StudentFormView({
   };
 
   // Simulated Manual File Selector Trigger
-  const handleSimulateUpload = (type: 'ijazah' | 'kk' | 'akta' | 'rapor') => {
+  const handleSimulateUpload = (type: 'ijazah' | 'kk' | 'akta' | 'rapor' | 'ktpAyahDoc' | 'ktpIbuDoc') => {
     let mockFileName = '';
     let mockSize = '1.2 MB';
 
@@ -271,9 +283,15 @@ export default function StudentFormView({
     } else if (type === 'akta') {
       mockFileName = `Akta_Lahir_${nama.replace(/\s+/g, '_') || 'Siswa'}.pdf`;
       mockSize = '720 KB';
-    } else {
+    } else if (type === 'rapor') {
       mockFileName = `Nilai_Rapor_Semester_Lalu_${nama.split(' ')[0] || 'Siswa'}.pdf`;
       mockSize = '2.1 MB';
+    } else if (type === 'ktpAyahDoc') {
+      mockFileName = `KTP_Ayah_${namaAyah.replace(/\s+/g, '_') || 'Wali'}.jpg`;
+      mockSize = '380 KB';
+    } else if (type === 'ktpIbuDoc') {
+      mockFileName = `KTP_Ibu_${namaIbu.replace(/\s+/g, '_') || 'Wali'}.jpg`;
+      mockSize = '420 KB';
     }
 
     setDocsUploaded(prev => ({
@@ -293,29 +311,55 @@ export default function StudentFormView({
   };
 
   // Remove uploaded file
-  const handleRemoveDoc = (type: 'ijazah' | 'kk' | 'akta' | 'rapor') => {
+  const handleRemoveDoc = (type: 'ijazah' | 'kk' | 'akta' | 'rapor' | 'ktpAyahDoc' | 'ktpIbuDoc') => {
     setDocsUploaded(prev => ({
       ...prev,
       [type]: null
     }));
   };
 
-  // Simulate AI scan with ThinkingLevel.HIGH and models/gemini-3.1-pro-preview
-  const triggerAiScan = (type: 'kk' | 'akta' | 'ijazah') => {
+  // Simulate AI scan with ThinkingLevel.HIGH and models/gemini-3.1-pro-preview / Tesseract.js
+  const triggerAiScan = (type: 'kk' | 'akta' | 'ijazah' | 'ktp_ayah' | 'ktp_ibu') => {
     setScannedDocType(type);
     setIsScanning(true);
     setScanProgressLogs([]);
 
-    const scanLogs = [
-      '⚡ [SISTEM]: Membuat sesi penawaran model cerdas @google/genai (gemini-3.1-pro-preview)...',
-      '⚙️ [AI]: Mengaktifkan Pemikiran Intensitas Tinggi (ThinkingLevel.HIGH)...',
-      '🔍 [AI]: Memindai struktur metadata dokumen ' + type.toUpperCase() + '...',
-      '🎓 [AI]: Menemukan kesesuaian penanda PKBM Teknologi Mustaqbal...',
-      '📑 [AI]: Melakukan Optical Character Recognition (OCR) pada formulir arsip...',
-      '👤 [AI]: Mengekstrak Identitas Siswa beserta Nama Orang Tua & Pekerjaan...',
-      '📂 [AI]: Melacak relasi data kependudukan dan memvalidasi nomor telepon...',
-      '🚀 [SUKSES]: Integrasi berhasil memetakan 14 bidang data kependudukan lengkap!'
-    ];
+    const getLogs = () => {
+      if (type === 'ktp_ayah') {
+        return [
+          '⚡ [SISTEM]: Memutar modul OCR KTP Lokal (Tesseract.js)...',
+          '⚙️ [LOCAL-OCR]: Menginisialisasi model klasifikasi segmentasi NIK...',
+          '🔍 [OCR]: Membaca citra KTP_Ayah_Irvan_Kusuma.jpg...',
+          '📑 [OCR]: Berhasil mengurai nomor NIK "3273181803760002" & Alamat...',
+          '👤 [SISTEM]: Memetakan nama Ayah "Irvan Kusuma Maharani", Pekerjaan, No HP...',
+          '📂 [SISTEM]: Otomatis menyinkronkan draf pendaftaran kesiswaan...',
+          '🚀 [SUKSES]: Data KTP Ayah berhasil di-ekstrak lokal tanpa biaya API cloud!'
+        ];
+      } else if (type === 'ktp_ibu') {
+        return [
+          '⚡ [SISTEM]: Memutar modul OCR KTP Lokal (Tesseract.js)...',
+          '⚙️ [LOCAL-OCR]: Menginisialisasi model klasifikasi segmentasi NIK...',
+          '🔍 [OCR]: Membaca citra KTP_Ibu_Siti_Halimah.jpg...',
+          '📑 [OCR]: Berhasil mengurai nomor NIK "3273184407810003" & Alamat...',
+          '👤 [SISTEM]: Memetakan nama Ibu "Siti Halimah", Pekerjaan "Ibu Rumah Tangga"...',
+          '📂 [SISTEM]: Otomatis menyinkronkan draf pendaftaran kesiswaan...',
+          '🚀 [SUKSES]: Data KTP Ibu berhasil di-ekstrak lokal tanpa biaya API cloud!'
+        ];
+      } else {
+        return [
+          '⚡ [SISTEM]: Membuat sesi penawaran model cerdas @google/genai (gemini-3.1-pro-preview)...',
+          '⚙️ [AI]: Mengaktifkan Pemikiran Intensitas Tinggi (ThinkingLevel.HIGH)...',
+          '🔍 [AI]: Memindai struktur metadata dokumen ' + type.toUpperCase() + '...',
+          '🎓 [AI]: Menemukan kesesuaian penanda PKBM Teknologi Mustaqbal...',
+          '📑 [AI]: Melakukan Optical Character Recognition (OCR) pada formulir arsip...',
+          '👤 [AI]: Mengekstrak Identitas Siswa beserta Nama Orang Tua & Pekerjaan...',
+          '📂 [AI]: Melacak relasi data kependudukan dan memvalidasi nomor telepon...',
+          '🚀 [SUKSES]: Integrasi berhasil memetakan 14 bidang data kependudukan lengkap!'
+        ];
+      }
+    };
+
+    const scanLogs = getLogs();
 
     let count = 0;
     const interval = setInterval(() => {
@@ -385,7 +429,7 @@ export default function StudentFormView({
               akta: { name: 'Akta_Lahir_Ade_Bagus.pdf', size: '780 KB', status: 'Verifikasi' }
             }));
 
-          } else {
+          } else if (type === 'ijazah') {
             setNama('Kevin Austin Pratama');
             setNisn('0083344556');
             setKelas('XII RPL 1');
@@ -415,6 +459,33 @@ export default function StudentFormView({
               ijazah: { name: 'Ijazah_SMP_Kevin_Austin.pdf', size: '1.4 MB', status: 'Verifikasi' },
               rapor: { name: 'Rapor_SMP_Smt5_Kevin.pdf', size: '2.3 MB', status: 'Verifikasi' }
             }));
+          } else if (type === 'ktp_ayah') {
+            // Fill father details specifically
+            setNamaAyah('Irvan Kusuma Maharani');
+            setPekerjaanAyah('Karyawan Swasta');
+            setKtpAyah('3273181803760002');
+            setTeleponAyah('089987654311');
+            setTeleponOrangTua('089987654311');
+            setAlamatOrangTua('Perumahan Cigadung Elok Blok D-22, Coblong, Bandung');
+
+            // Attach KTP Ayah document
+            setDocsUploaded(prev => ({
+              ...prev,
+              ktpAyahDoc: { name: 'KTP_Ayah_Irvan_Kusuma.jpg', size: '380 KB', status: 'Verifikasi' }
+            }));
+          } else if (type === 'ktp_ibu') {
+            // Fill mother details specifically
+            setNamaIbu('Siti Halimah');
+            setPekerjaanIbu('Ibu Rumah Tangga');
+            setKtpIbu('3273184407810003');
+            setTeleponIbu('089912123434');
+            setAlamatOrangTua('Perumahan Cigadung Elok Blok D-22, Coblong, Bandung');
+
+            // Attach KTP Ibu document
+            setDocsUploaded(prev => ({
+              ...prev,
+              ktpIbuDoc: { name: 'KTP_Ibu_Siti_Halimah.jpg', size: '420 KB', status: 'Verifikasi' }
+            }));
           }
 
           setIsScanning(false);
@@ -425,12 +496,12 @@ export default function StudentFormView({
           onAddLog(
             'Pemindaian AI',
             'Siswa',
-            `Melakukan ekstraksi pendaftaran AI scan menggunakan model cerdas kementerian untuk melengkapi folder murid.`
+            `Melakukan ekstraksi berkas ${type.toUpperCase()} menggunakan modul OCR lokal untuk melengkapi arsip.`
           );
 
           onAddNotification(
-            'Auto-Fill AI Sukses',
-            `Data siswa, orang tua, dan berkas scan berhasil dimasukkan secara otomatis! Silakan tinjau tiap tab.`,
+            'Auto-Fill OCR Sukses',
+            `Data bidang kependudukan dari berkas berhasil diekstrak otomatis! Silakan tinjau tab Orang Tua.`,
             'success'
           );
 
@@ -1117,6 +1188,110 @@ export default function StudentFormView({
                   )}
                 </div>
 
+                {/* 5. KTP Ayah */}
+                <div className="p-4 bg-white border border-slate-200 rounded-xl hover:shadow-xs transition flex flex-col justify-between space-y-4">
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="font-extrabold text-slate-800 text-xs uppercase tracking-wider flex items-center gap-1.5">
+                        <span className="w-2 h-2 rounded-full bg-blue-500"></span>
+                        KTP Ayah Kandung / Wali
+                      </span>
+                      {docsUploaded.ktpAyahDoc ? (
+                        <span className="text-[10px] bg-emerald-50 text-emerald-800 px-2 py-0.5 rounded-full font-bold flex items-center gap-0.5">
+                          <Check size={10} /> Terlampir
+                        </span>
+                      ) : (
+                        <span className="text-[10px] bg-amber-50 text-amber-700 px-2 py-0.5 rounded-full font-bold flex items-center gap-0.5">
+                          <AlertCircle size={10} /> Belum Ada
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-[10.5px] text-slate-400 leading-normal">Salinan KTP Ayah Kandung atau Wali murid yang terdaftar.</p>
+                  </div>
+
+                  {docsUploaded.ktpAyahDoc ? (
+                    <div className="p-3 bg-slate-50 rounded-lg flex items-center justify-between border border-dashed border-slate-200">
+                      <div className="flex items-center space-x-2.5 min-w-0">
+                        <FileText size={18} className="text-blue-500 shrink-0" />
+                        <div className="min-w-0">
+                          <p className="font-bold text-slate-800 text-[11px] truncate">{docsUploaded.ktpAyahDoc.name}</p>
+                          <p className="text-[9.5px] text-slate-400 font-mono mt-0.5">{docsUploaded.ktpAyahDoc.size} &bull; Status: {docsUploaded.ktpAyahDoc.status}</p>
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => handleRemoveDoc('ktpAyahDoc')}
+                        className="text-red-500 hover:bg-red-50 p-1.5 rounded transition shrink-0"
+                        title="Hapus Berkas"
+                      >
+                        <X size={14} />
+                      </button>
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => handleSimulateUpload('ktpAyahDoc')}
+                      className="border-2 border-dashed border-slate-200 hover:border-emerald-500 bg-slate-50 hover:bg-emerald-50/10 p-5 rounded-xl transition flex flex-col items-center justify-center text-center space-y-1 cursor-pointer"
+                    >
+                      <UploadCloud size={20} className="text-slate-400" />
+                      <span className="font-bold text-xs text-slate-600">Unggah KTP Ayah</span>
+                      <span className="text-[9px] text-slate-400">Pilih berkas dari komputer (PDF/JPG)</span>
+                    </button>
+                  )}
+                </div>
+
+                {/* 6. KTP Ibu */}
+                <div className="p-4 bg-white border border-slate-200 rounded-xl hover:shadow-xs transition flex flex-col justify-between space-y-4">
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="font-extrabold text-slate-800 text-xs uppercase tracking-wider flex items-center gap-1.5">
+                        <span className="w-2 h-2 rounded-full bg-pink-500"></span>
+                        KTP Ibu Kandung / Wali
+                      </span>
+                      {docsUploaded.ktpIbuDoc ? (
+                        <span className="text-[10px] bg-emerald-50 text-emerald-800 px-2 py-0.5 rounded-full font-bold flex items-center gap-0.5">
+                          <Check size={10} /> Terlampir
+                        </span>
+                      ) : (
+                        <span className="text-[10px] bg-amber-50 text-amber-700 px-2 py-0.5 rounded-full font-bold flex items-center gap-0.5">
+                          <AlertCircle size={10} /> Belum Ada
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-[10.5px] text-slate-400 leading-normal">Salinan KTP Ibu Kandung atau Wali murid yang terdaftar.</p>
+                  </div>
+
+                  {docsUploaded.ktpIbuDoc ? (
+                    <div className="p-3 bg-slate-50 rounded-lg flex items-center justify-between border border-dashed border-slate-200">
+                      <div className="flex items-center space-x-2.5 min-w-0">
+                        <FileText size={18} className="text-pink-500 shrink-0" />
+                        <div className="min-w-0">
+                          <p className="font-bold text-slate-800 text-[11px] truncate">{docsUploaded.ktpIbuDoc.name}</p>
+                          <p className="text-[9.5px] text-slate-400 font-mono mt-0.5">{docsUploaded.ktpIbuDoc.size} &bull; Status: {docsUploaded.ktpIbuDoc.status}</p>
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => handleRemoveDoc('ktpIbuDoc')}
+                        className="text-red-500 hover:bg-red-50 p-1.5 rounded transition shrink-0"
+                        title="Hapus Berkas"
+                      >
+                        <X size={14} />
+                      </button>
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => handleSimulateUpload('ktpIbuDoc')}
+                      className="border-2 border-dashed border-slate-200 hover:border-emerald-500 bg-slate-50 hover:bg-emerald-50/10 p-5 rounded-xl transition flex flex-col items-center justify-center text-center space-y-1 cursor-pointer"
+                    >
+                      <UploadCloud size={20} className="text-slate-400" />
+                      <span className="font-bold text-xs text-slate-600">Unggah KTP Ibu</span>
+                      <span className="text-[9px] text-slate-400">Pilih berkas dari komputer (PDF/JPG)</span>
+                    </button>
+                  )}
+                </div>
+
               </div>
 
               {/* Tab control */}
@@ -1243,6 +1418,42 @@ export default function StudentFormView({
                       <div>
                         <p className="font-bold text-slate-800">Ijazah_SMP_Kevin.pdf</p>
                         <p className="text-[10px] text-slate-400 mt-0.5">Berkas scan Ijazah kelulusan tingkat SMP.</p>
+                      </div>
+                    </div>
+                    <Sparkles size={14} className="text-emerald-500 shrink-0" />
+                  </button>
+
+                  {/* Option 4 */}
+                  <button
+                    id="scan-option-ktpayah"
+                    onClick={() => triggerAiScan('ktp_ayah')}
+                    className="flex items-center justify-between p-3 border border-slate-200 rounded-xl hover:bg-slate-50 text-left transition hover:border-emerald-500 cursor-pointer"
+                  >
+                    <div className="flex items-center space-x-3">
+                      <div className="bg-sky-50 text-sky-500 p-2 rounded-lg">
+                        <FileSearch2 size={16} />
+                      </div>
+                      <div>
+                        <p className="font-bold text-slate-800">KTP_Ayah_Irvan_Kusuma.jpg</p>
+                        <p className="text-[10px] text-slate-400 mt-0.5">Membaca KTP Ayah resmi dengan OCR Tesseract.js lokal.</p>
+                      </div>
+                    </div>
+                    <Sparkles size={14} className="text-emerald-500 shrink-0" />
+                  </button>
+
+                  {/* Option 5 */}
+                  <button
+                    id="scan-option-ktpibu"
+                    onClick={() => triggerAiScan('ktp_ibu')}
+                    className="flex items-center justify-between p-3 border border-slate-200 rounded-xl hover:bg-slate-50 text-left transition hover:border-emerald-500 cursor-pointer"
+                  >
+                    <div className="flex items-center space-x-3">
+                      <div className="bg-pink-50 text-pink-500 p-2 rounded-lg">
+                        <FileSearch2 size={16} />
+                      </div>
+                      <div>
+                        <p className="font-bold text-slate-800">KTP_Ibu_Siti_Halimah.jpg</p>
+                        <p className="text-[10px] text-slate-400 mt-0.5">Membaca KTP Ibu resmi dengan OCR Tesseract.js lokal.</p>
                       </div>
                     </div>
                     <Sparkles size={14} className="text-emerald-500 shrink-0" />
