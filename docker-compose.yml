@@ -18,17 +18,7 @@ services:
       retries: 5
     restart: always
 
-  # 2. OCR Service (PaddleOCR + Python Uvicorn)
-  ocr:
-    build:
-      context: ./ocr-service
-      dockerfile: Dockerfile
-    container_name: arbal-ocr
-    environment:
-      - PORT=8000
-    restart: always
-
-  # 3. NestJS Backend API
+  # 2. NestJS Backend API
   backend:
     build:
       context: ./backend
@@ -40,7 +30,6 @@ services:
       - JWT_SECRET=${JWT_SECRET:-arbal_jwt_secret_key_change_me_in_prod}
       - JWT_REFRESH_SECRET=${JWT_REFRESH_SECRET:-arbal_jwt_refresh_secret_key_change_me_in_prod}
       - CORS_ORIGINS=http://localhost,http://localhost:3000,http://192.168.100.112
-      - OCR_SERVICE_URL=http://ocr:8000
     volumes:
       - uploads_data:/app/uploads
       - backups_data:/app/backups

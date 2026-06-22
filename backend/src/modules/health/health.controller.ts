@@ -40,7 +40,6 @@ export class HealthController {
       database: 'ERROR',
       uploads: 'ERROR',
       backups: 'ERROR',
-      ocr: 'ERROR',
     };
 
     // 1. Check Database connection
@@ -73,23 +72,6 @@ export class HealthController {
       diagnostics.backups = 'OK';
     } catch (err) {
       diagnostics.backups = 'ERROR';
-      diagnostics.status = 'ERROR';
-    }
-
-    // 4. Check OCR service connection
-    const ocrUrl = process.env.OCR_SERVICE_URL || 'http://localhost:8000';
-    try {
-      const res = await fetch(`${ocrUrl}/health`, {
-        signal: AbortSignal.timeout(5000),
-      });
-      if (res.ok) {
-        diagnostics.ocr = 'OK';
-      } else {
-        diagnostics.ocr = `ERROR (HTTP ${res.status})`;
-        diagnostics.status = 'ERROR';
-      }
-    } catch (err) {
-      diagnostics.ocr = 'ERROR (Unreachable)';
       diagnostics.status = 'ERROR';
     }
 

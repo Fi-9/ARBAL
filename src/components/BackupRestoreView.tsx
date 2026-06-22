@@ -37,6 +37,9 @@ interface BackupResponse {
   backups: BackupItem[];
   lastBackupAt: string | null;
   totalSizeMB: number;
+  uploadsSizeMB?: number;
+  backupsSizeMB?: number;
+  freeSpaceBytes?: number;
 }
 
 export default function BackupRestoreView() {
@@ -93,6 +96,13 @@ export default function BackupRestoreView() {
       return `${(mb / 1024).toFixed(2)} GB`;
     }
     return `${mb.toFixed(2)} MB`;
+  };
+
+  // Format free space bytes
+  const formatFreeSpace = (bytes: number) => {
+    if (!bytes) return '-';
+    const gb = bytes / 1024 / 1024 / 1024;
+    return `${gb.toFixed(2)} GB`;
   };
 
   // Format date time helper
@@ -182,7 +192,9 @@ export default function BackupRestoreView() {
 
   const backupsList = data?.backups || [];
   const lastBackupAt = data?.lastBackupAt || null;
-  const totalSizeMB = data?.totalSizeMB || 0;
+  const backupsSizeMB = data?.backupsSizeMB || data?.totalSizeMB || 0;
+  const uploadsSizeMB = data?.uploadsSizeMB || 0;
+  const freeSpaceBytes = data?.freeSpaceBytes || 0;
 
   return (
     <div id="backup-restore-view" className="space-y-6">
@@ -193,35 +205,47 @@ export default function BackupRestoreView() {
         <div>
           <h4 className="font-bold text-amber-950">Informasi Keamanan Penting</h4>
           <p className="mt-1 leading-relaxed text-slate-600 font-normal">
-            Fitur **Restore** database sengaja dinonaktifkan dari panel UI ini untuk mencegah kegagalan data akibat salah klik oleh pengguna. Pemulihan database hanya diizinkan melalui baris perintah (**CLI**) atau sistem administrasi server oleh personil IT yang berwenang.
+            Fitur **Restore** database sengaja dinonaktifkan dari panel UI ini untuk mencegah kegagalan data akibat salah klik oleh pengguna. Pemulihan database hanya diizinkan melalui baris perintah (**CLI**) or sistem administrasi server oleh personil IT yang berwenang.
           </p>
         </div>
       </div>
 
       {/* Metrics Widgets */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-5">
+      <div className="grid grid-cols-1 sm:grid-cols-4 gap-5">
         
-        {/* Total Size */}
+        {/* Backups Storage Size */}
         <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm flex items-center justify-between">
           <div>
-            <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Total Kapasitas Backup</p>
-            <h3 className="text-2xl font-bold text-slate-800 mt-1.5">{isLoading ? '-' : formatSize(totalSizeMB)}</h3>
-            <p className="text-xs text-slate-500 mt-1">Gumpalan ZIP (DB + berkas unggahan)</p>
+            <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Penyimpanan Backup</p>
+            <h3 className="text-2xl font-bold text-slate-800 mt-1.5">{isLoading ? '-' : formatSize(backupsSizeMB)}</h3>
+            <p className="text-xs text-slate-500 mt-1">Total: {backupsList.length} File ZIP</p>
           </div>
           <div className="bg-emerald-50 text-emerald-600 p-3 rounded-lg shrink-0">
             <HardDrive size={22} />
           </div>
         </div>
 
-        {/* Total Backups File */}
+        {/* Uploads Directory Size */}
         <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm flex items-center justify-between">
           <div>
-            <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Jumlah File Cadangan</p>
-            <h3 className="text-2xl font-bold text-slate-800 mt-1.5">{isLoading ? '-' : `${backupsList.length} File`}</h3>
-            <p className="text-xs text-slate-500 mt-1">Maksimal 7 file terakhir disimpan</p>
+            <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Direktori Unggahan</p>
+            <h3 className="text-2xl font-bold text-slate-800 mt-1.5">{isLoading ? '-' : formatSize(uploadsSizeMB)}</h3>
+            <p className="text-xs text-slate-500 mt-1">Berkas digital kesiswaan</p>
           </div>
           <div className="bg-blue-50 text-blue-500 p-3 rounded-lg shrink-0">
             <FileArchive size={22} />
+          </div>
+        </div>
+
+        {/* Disk Free Space */}
+        <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm flex items-center justify-between">
+          <div>
+            <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Kapasitas Disk Sisa</p>
+            <h3 className="text-2xl font-bold text-slate-800 mt-1.5">{isLoading ? '-' : formatFreeSpace(freeSpaceBytes)}</h3>
+            <p className="text-xs text-slate-500 mt-1">Ruang kosong di server</p>
+          </div>
+          <div className="bg-amber-50 text-amber-600 p-3 rounded-lg shrink-0">
+            <Database size={22} />
           </div>
         </div>
 
@@ -229,10 +253,10 @@ export default function BackupRestoreView() {
         <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm flex items-center justify-between">
           <div>
             <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Backup Terakhir</p>
-            <h3 className="text-sm font-bold text-slate-800 mt-2.5 truncate max-w-[200px]">
+            <h3 className="text-sm font-bold text-slate-800 mt-2.5 truncate max-w-[160px]">
               {isLoading ? '-' : formatDateTime(lastBackupAt)}
             </h3>
-            <p className="text-xs text-slate-500 mt-1">Automasi berjalan setiap hari pada 01.00 WIB</p>
+            <p className="text-xs text-slate-500 mt-1">Otomasi daily: 01.00 WIB</p>
           </div>
           <div className="bg-indigo-50 text-indigo-600 p-3 rounded-lg shrink-0">
             <Clock size={22} />

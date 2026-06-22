@@ -495,12 +495,39 @@ Gunakan utilitas CLI pg_restore/psql untuk memulihkan database.sql, dan salin/ek
     return resolveBackupFile(fileName);
   }
 
+  private getDirSize(dirPath: string): number {
+    let size = 0;
+    if (!existsSync(dirPath)) return 0;
+    try {
+      const files = readdirSync(dirPath);
+      for (const file of files) {
+        const filePath = resolve(dirPath, file);
+        const stats = statSync(filePath);
+        if (stats.isDirectory()) {
+          size += this.getDirSize(filePath);
+        } else {
+          size += stats.size;
+        }
+      }
+    } catch {
+      // Ignore errors
+    }
+    return size;
+  }
+
   /**
    * Liste tous les backups disponibles
    */
   listBackups() {
     if (!existsSync(BACKUPS_DIR)) {
-      return { backups: [], lastBackupAt: null, totalSizeMB: 0 };
+      return { 
+        backups: [], 
+        lastBackupAt: null, 
+        totalSizeMB: 0,
+        uploadsSizeMB: 0,
+        backupsSizeMB: 0,
+        freeSpaceBytes: 0
+      };
     }
 
     const backups = readdirSync(BACKUPS_DIR)
@@ -521,10 +548,25 @@ Gunakan utilitas CLI pg_restore/psql untuk memulihkan database.sql, dan salin/ek
       backups.reduce((acc, b) => acc + b.sizeMB, 0).toFixed(2)
     );
 
+    const uploadsSize = this.getDirSize(UPLOADS_DIR);
+    const backupsSize = this.getDirSize(BACKUPS_DIR);
+
+    let freeSpaceBytes = 0;
+    try {
+      const { statfsSync } = require('fs');
+      const stats = statfsSync(BACKUPS_DIR);
+      freeSpaceBytes = stats.bavail * stats.bsize;
+    } catch {
+      // Fallback
+    }
+
     return {
       backups,
       lastBackupAt,
       totalSizeMB,
+      uploadsSizeMB: parseFloat((uploadsSize / 1024 / 1024).toFixed(2)),
+      backupsSizeMB: parseFloat((backupsSize / 1024 / 1024).toFixed(2)),
+      freeSpaceBytes,
     };
   }
 
