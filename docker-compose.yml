@@ -41,6 +41,14 @@ services:
       - JWT_REFRESH_SECRET=${JWT_REFRESH_SECRET:-arbal_jwt_refresh_secret_key_change_me_in_prod}
       - CORS_ORIGINS=http://localhost,http://localhost:3000,http://192.168.100.112
       - OCR_SERVICE_URL=http://ocr:8000
+    volumes:
+      - uploads_data:/app/uploads
+      - backups_data:/app/backups
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"fetch('http://localhost:3001/api/v1/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))\""]
+      interval: 10s
+      timeout: 5s
+      retries: 5
     depends_on:
       db:
         condition: service_healthy
@@ -57,8 +65,11 @@ services:
     ports:
       - "3000:80"
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
     restart: always
 
 volumes:
   pgdata:
+  uploads_data:
+  backups_data:
