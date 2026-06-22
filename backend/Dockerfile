@@ -25,4 +25,4 @@ COPY --from=builder /app/prisma ./prisma
 EXPOSE 3001
 
 # Run migrations and start the backend in production mode
-CMD ["sh", "-c", "mkdir -p /app/uploads /app/backups && npx prisma generate && npx prisma migrate deploy && npm run start:prod"]
+CMD ["sh", "-c", "mkdir -p /app/uploads /app/backups && npx prisma migrate deploy && npm run start:prod"]

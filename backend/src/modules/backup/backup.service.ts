@@ -11,7 +11,16 @@ const execFileAsync = promisify(execFile);
 
 const BACKUPS_DIR = resolve(__dirname, '..', '..', '..', 'backups');
 const UPLOADS_DIR = resolve(__dirname, '..', '..', '..', 'uploads');
-const MAX_BACKUPS = 30; // Garde les 30 derniers backups
+function getMaxBackups(): number {
+  const val = process.env.MAX_BACKUPS;
+  return val ? parseInt(val, 10) : 30;
+}
+
+function getRetentionDays(): number {
+  const val = process.env.RETENTION_DAYS;
+  return val ? parseInt(val, 10) : 90;
+}
+
 const BACKUP_FILE_PATTERN = /^arbal-backup-(?:(?:daily|weekly|monthly|manual)-)?\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z\.zip$/;
 
 function ensureInsideDirectory(directory: string, candidatePath: string): void {
@@ -266,6 +275,67 @@ export class BackupService {
   }
 
   /**
+   * Vérification automatique des backups — chaque dimanche à 04:00 WIB
+   */
+  @Cron('0 4 * * 0', { timeZone: 'Asia/Jakarta' })
+  async verifyLatestBackupsCron() {
+    this.logger.log('Démarrage de la vérification automatique des backups...');
+    try {
+      const result = this.listBackups();
+      if (result.backups.length === 0) {
+        this.logger.log('Aucun backup trouvé pour la vérification.');
+        return;
+      }
+
+      // Vérifier les 3 derniers backups
+      const latestBackups = result.backups.slice(0, 3);
+      for (const b of latestBackups) {
+        const isValid = await this.verifyBackupFile(b.fileName);
+        if (!isValid) {
+          this.logger.error(`Le fichier de backup ${b.fileName} est corrompu ou incomplet !`);
+          await this.auditLog(
+            'SYSTEM',
+            'BACKUP_CORRUPTED',
+            b.fileName,
+            `[SYSTEM] Backup file verification failed: database.sql, metadata.json, or README.txt is missing in ZIP.`,
+          );
+        } else {
+          this.logger.log(`Le fichier de backup ${b.fileName} est valide dan sain.`);
+        }
+      }
+    } catch (err: any) {
+      this.logger.error(`Échec de la vérification des backups: ${err.message}`, err.stack);
+    }
+  }
+
+  async verifyBackupFile(fileName: string): Promise<boolean> {
+    const filePath = this.getBackupFilePath(fileName);
+    if (!existsSync(filePath)) return false;
+
+    try {
+      const isWindows = process.platform === 'win32';
+      let stdout = '';
+      if (isWindows) {
+        const cmd = `[Reflection.Assembly]::LoadWithPartialName('System.IO.Compression.FileSystem'); [System.IO.Compression.ZipFile]::OpenRead(${quotePowerShellLiteral(filePath)}).Entries.FullName`;
+        const res = await execFileAsync('powershell', ['-NoProfile', '-Command', cmd]);
+        stdout = res.stdout;
+      } else {
+        const res = await execFileAsync('unzip', ['-l', filePath]);
+        stdout = res.stdout;
+      }
+
+      const hasSql = stdout.includes('database.sql');
+      const hasMetadata = stdout.includes('metadata.json');
+      const hasReadme = stdout.includes('README.txt');
+
+      return hasSql && hasMetadata && hasReadme;
+    } catch (err: any) {
+      this.logger.error(`Failed to verify backup ${fileName}: ${err.message}`);
+      return false;
+    }
+  }
+
+  /**
    * Crée un backup complet : pg_dump SQL + répertoire uploads/ → ZIP
    */
   async createBackup(
@@ -452,8 +522,9 @@ Gunakan utilitas CLI pg_restore/psql untuk memulihkan database.sql, dan salin/ek
   private async cleanupOldBackups() {
     if (!existsSync(BACKUPS_DIR)) return;
 
-    // 1. Delete backups older than 90 days
-    const ninetyDaysAgoMs = Date.now() - 90 * 24 * 60 * 60 * 1000;
+    // 1. Delete backups older than dynamic retention days
+    const retentionDays = getRetentionDays();
+    const ninetyDaysAgoMs = Date.now() - retentionDays * 24 * 60 * 60 * 1000;
     const allFiles = readdirSync(BACKUPS_DIR)
       .filter(f => BACKUP_FILE_PATTERN.test(f))
       .map(f => ({ name: f, time: statSync(resolveBackupFile(f)).mtimeMs }));
@@ -462,26 +533,27 @@ Gunakan utilitas CLI pg_restore/psql untuk memulihkan database.sql, dan salin/ek
       if (file.time < ninetyDaysAgoMs) {
         try {
           unlinkSync(resolveBackupFile(file.name));
-          this.logger.log(`Auto-deleted backup older than 90 days: ${file.name}`);
-          await this.auditLog('SYSTEM', 'BACKUP_AUTO_DELETE', file.name, `[SYSTEM] Automatic deletion of backup file older than 90 days: ${file.name}`);
+          this.logger.log(`Auto-deleted backup older than ${retentionDays} days: ${file.name}`);
+          await this.auditLog('SYSTEM', 'BACKUP_AUTO_DELETE', file.name, `[SYSTEM] Automatic deletion of backup file older than ${retentionDays} days: ${file.name}`);
         } catch (err: any) {
           this.logger.error(`Failed to auto-delete old backup ${file.name}: ${err.message}`);
         }
       }
     }
 
-    // 2. Enforce MAX_BACKUPS limit (30)
+    // 2. Enforce MAX_BACKUPS limit
+    const maxBackups = getMaxBackups();
     const remainingFiles = readdirSync(BACKUPS_DIR)
       .filter(f => BACKUP_FILE_PATTERN.test(f))
       .map(f => ({ name: f, time: statSync(resolveBackupFile(f)).mtimeMs }))
       .sort((a, b) => b.time - a.time);
 
-    for (let i = MAX_BACKUPS; i < remainingFiles.length; i++) {
+    for (let i = maxBackups; i < remainingFiles.length; i++) {
       const fileName = remainingFiles[i].name;
       try {
         unlinkSync(resolveBackupFile(fileName));
         this.logger.log(`Auto-deleted backup exceeding retention limit: ${fileName}`);
-        await this.auditLog('SYSTEM', 'BACKUP_AUTO_DELETE', fileName, `[SYSTEM] Automatic deletion of backup file exceeding retention limit of ${MAX_BACKUPS}: ${fileName}`);
+        await this.auditLog('SYSTEM', 'BACKUP_AUTO_DELETE', fileName, `[SYSTEM] Automatic deletion of backup file exceeding retention limit of ${maxBackups}: ${fileName}`);
       } catch (err: any) {
         this.logger.error(`Failed to auto-delete limit-exceeding backup ${fileName}: ${err.message}`);
       }
