@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { JwtModule } from '@nestjs/jwt';
 import { HealthController } from './health.controller';
+import { VersionController } from './version.controller';
 import { PrismaModule } from '../../prisma/prisma.module';
 
 @Module({
@@ -10,6 +11,6 @@ import { PrismaModule } from '../../prisma/prisma.module';
       secret: process.env.JWT_SECRET || 'fallback-secret-for-type-safety',
     }),
   ],
-  controllers: [HealthController],
+  controllers: [HealthController, VersionController],
 })
 export class HealthModule {}
