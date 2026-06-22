@@ -9,7 +9,6 @@ generator client_backend {
 
 datasource db {
   provider = "postgresql"
-  url      = env("DATABASE_URL")
 }
 
 model AcademicYear {
