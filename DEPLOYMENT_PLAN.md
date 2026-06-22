@@ -155,7 +155,7 @@ services:
     environment:
       - NODE_ENV=production
       - PORT=3000
-      - DATABASE_URL=postgres://arbal_admin:SuperSandiArbal2026@db:5432/arbal_db
+      - DATABASE_URL=postgres://arbal_admin:<CHANGE_ME>@db:5432/arbal_db
       - GEMINI_API_KEY=${GEMINI_API_KEY}
       - GOOGLE_APPLICATION_CREDENTIALS=/app/google-key.json
     depends_on:
@@ -169,7 +169,7 @@ services:
     container_name: arbal-database
     environment:
       - POSTGRES_USER=arbal_admin
-      - POSTGRES_PASSWORD=SuperSandiArbal2026
+      - POSTGRES_PASSWORD=<CHANGE_ME>
       - POSTGRES_DB=arbal_db
     volumes:
       - pgdata:/var/lib/postgresql/data
@@ -188,7 +188,7 @@ services:
     container_name: arbal-pgadmin
     environment:
       - PGADMIN_DEFAULT_EMAIL=admin.siakad@sekolah.sch.id
-      - PGADMIN_DEFAULT_PASSWORD=AdminArbalPas789
+      - PGADMIN_DEFAULT_PASSWORD=<CHANGE_ME>
     ports:
       - "80:80"
     depends_on:
@@ -226,7 +226,7 @@ Setelah stack berhasil dijalankan di Coolify, integrasikan database PostgreSQL k
    * **Host:** `db:5432` *(karena berjalan di satu jaringan Docker internal)*
    * **Database:** `arbal_db`
    * **User:** `arbal_admin`
-   * **Password:** `SuperSandiArbal2026`
+   * **Password:** `<CHANGE_ME>`
    * **SSL Mode:** `disable` (internal docker network tidak memerlukan enkripsi SSL tambahan)
 5. Klik **Save & Test**.
 

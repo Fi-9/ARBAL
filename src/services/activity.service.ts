@@ -4,6 +4,11 @@
  *
  * Activity Log & Notification Service — real API adapter with response mapping.
  * Maps backend ActivityLog rows to the frontend ActivityLog type.
+ *
+ * Phase 2 — Audit Log Integrity:
+ *   addLog() has been removed. All audit log entries are now created
+ *   exclusively by backend services (auth, students, documents, users, backup).
+ *   The frontend only reads logs via GET /api/v1/logs.
  */
 
 import { ActivityLog, RoleType, SystemNotification } from '../types';
@@ -19,6 +24,13 @@ const DB_CATEGORY_MAP: Record<string, ActivityLog['category']> = {
   DOKUMEN: 'Dokumen',
   HAK_AKSES: 'Hak Akses',
   AUTENTIKASI: 'Hak Akses', // closest frontend category
+  BACKUP: 'Siswa', // displayed under general category
+};
+
+/** Map DB RoleName enum → frontend RoleType label */
+const DB_ROLE_MAP: Record<string, RoleType> = {
+  SUPER_ADMIN: 'Super Admin',
+  GURU: 'Guru / Wali Kelas',
 };
 
 function mapBackendLog(raw: any): ActivityLog {
@@ -28,11 +40,16 @@ function mapBackendLog(raw: any): ActivityLog {
   // Format: "YYYY-MM-DD HH:mm"
   const timestamp = createdAt.replace('T', ' ').substring(0, 16);
 
+  // Resolve actor role: backend returns raw.actorRole (from User.Role.name)
+  // or raw.User?.Role?.name — map DB enum to frontend label
+  const rawRole = raw.actorRole ?? raw.User?.Role?.name ?? '';
+  const actorRole: RoleType = DB_ROLE_MAP[rawRole] ?? ((rawRole as RoleType) || 'Guru / Wali Kelas');
+
   return {
     id: raw.id,
     timestamp,
     actorName: raw.User?.name ?? raw.actorName ?? 'Sistem',
-    actorRole: 'Super Admin' as RoleType, // Role is not stored in ActivityLog; default for display
+    actorRole,
     action: raw.action,
     category: DB_CATEGORY_MAP[raw.category] ?? 'Siswa',
     details: raw.details,
@@ -52,24 +69,8 @@ export const activityService = {
     return rows.map(mapBackendLog);
   },
 
-  /** POST /api/v1/logs */
-  addLog: async (
-    action: string,
-    category: ActivityLog['category'],
-    details: string,
-    actorName: string,
-    actorRole: RoleType,
-  ): Promise<ActivityLog> => {
-    const { data } = await api.post<any>('/logs', {
-      action,
-      category: mapCategoryToDb(category),
-      details,
-      entityType: category,
-      entityId: undefined,
-      actorUserId: 'SYSTEM',
-    });
-    return mapBackendLog(data);
-  },
+  // addLog() has been intentionally removed — see Phase 2 audit remediation.
+  // All audit logs are created by backend services, never from the client.
 };
 
 // ---------------------------------------------------------------------------
@@ -113,18 +114,3 @@ export const notificationService = {
     _notifications = _notifications.filter((n) => n.id !== id);
   },
 };
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-function mapCategoryToDb(category: ActivityLog['category']): string {
-  const map: Record<string, string> = {
-    Siswa: 'SISWA',
-    Dokumen: 'DOKUMEN',
-    'Hak Akses': 'HAK_AKSES',
-    'Google Drive': 'DOKUMEN',
-    'Google Sheets': 'DOKUMEN',
-  };
-  return map[category] ?? 'SISWA';
-}

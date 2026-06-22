@@ -3,15 +3,6 @@
  * SPDX-License-Identifier: Apache-2.0
  *
  * Auth Store — JWT session + backward-compat RoleType.
- *
- * STATE BOUNDARY:
- *   - accessToken + user profile → ZuStand (memory-only; refresh cookie is httpOnly)
- *   - selectedRole | actorName   → derived for backward compatibility
- *
- * ROLE MAPPING (DB → frontend):
- *   SUPER_ADMIN → 'Super Admin'
- *   STAFF_TU    → 'Staff TU'
- *   GURU        → 'Guru / Wali Kelas'
  */
 
 import { create } from 'zustand';
@@ -28,25 +19,22 @@ export interface UserProfile {
   role: string;
 }
 
-type DbRole = 'SUPER_ADMIN' | 'STAFF_TU' | 'GURU';
+type DbRole = 'SUPER_ADMIN' | 'GURU';
 
 const DB_TO_FRONTEND: Record<DbRole, RoleType> = {
   SUPER_ADMIN: 'Super Admin',
-  STAFF_TU: 'Staff TU',
   GURU: 'Guru / Wali Kelas',
 };
 
 const FRONTEND_TO_DB: Record<RoleType, DbRole> = {
   'Super Admin': 'SUPER_ADMIN',
-  'Staff TU': 'STAFF_TU',
   'Guru / Wali Kelas': 'GURU',
 };
 
-/** Default actor names per frontend role — used as fallback when user.name is missing */
+/** Generic actor labels per frontend role — used only as a last-resort fallback */
 const ACTOR_NAMES: Record<RoleType, string> = {
-  'Super Admin': 'Drs. H. Mulyono',
-  'Staff TU': 'Rina Herawati, S.Pd',
-  'Guru / Wali Kelas': 'Asep Saepudin, M.Pd',
+  'Super Admin': 'Super Admin',
+  'Guru / Wali Kelas': 'Guru / Wali Kelas',
 };
 
 // ---------------------------------------------------------------------------
@@ -60,12 +48,10 @@ interface AuthState {
   isLoading: boolean;
 
   // ── Backward-compat derived API ──────────────────────────────────────────
-  // These are cached in Zustand so existing code (App.tsx, views, hooks)
-  // continues to work without changes. Updated whenever setSession is called.
   selectedRole: RoleType;
   actorName: string;
 
-  // ── Session actions ──────────────────────────────────────────────────────
+  // ── Session actions ────────────────────────────────----------------──────
   setSession: (token: string, user: UserProfile) => void;
   setAccessToken: (token: string) => void;
   clearSession: () => void;
@@ -81,7 +67,7 @@ export const useAuthStore = create<AuthState>((set) => ({
   user: null,
   isLoading: true,
 
-  // Backward-compat defaults (will be overwritten by setSession)
+  // Backward-compat defaults
   selectedRole: 'Super Admin',
   actorName: ACTOR_NAMES['Super Admin'],
 
@@ -117,16 +103,11 @@ export const useAuthStore = create<AuthState>((set) => ({
     }),
 }));
 
-// ---------------------------------------------------------------------------
-// Helpers (unchanged API)
-// ---------------------------------------------------------------------------
-
 export const getActorName = (role: RoleType): string => ACTOR_NAMES[role];
 
+/** DEPRECATED: Use authStore.user.name instead. Kept for backward-compat only, returns generic label. */
 export const getActiveUserLabel = (role: RoleType): string => {
-  if (role === 'Super Admin') return 'Drs. H. Mulyono (Kepala Sekolah)';
-  if (role === 'Staff TU') return 'Rina Herawati, S.Pd (Waka. Kesiswaan/TU)';
-  return 'Asep Saepudin, M.Pd (Wali Kelas XII RPL)';
+  return ACTOR_NAMES[role] || role;
 };
 
 export const mapRoleToDb = (role: RoleType): string => FRONTEND_TO_DB[role] ?? role;

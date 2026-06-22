@@ -21,20 +21,26 @@ import { queryKeys } from '../lib/queryKeys';
 
 export function useSessionQuery() {
   const setSession = useAuthStore((s) => s.setSession);
+  const accessToken = useAuthStore((s) => s.accessToken);
 
   return useQuery({
     queryKey: queryKeys.auth.session(),
     queryFn: async () => {
-      const result = await authService.refresh();
-      if (result?.accessToken && result?.user) {
-        setSession(result.accessToken, result.user);
+      try {
+        const result = await authService.refresh();
+        if (result?.accessToken && result?.user) {
+          setSession(result.accessToken, result.user);
+        }
+        return result;
+      } finally {
+        // Always clear loading flag, even when refresh fails or returns null
+        useAuthStore.getState().setLoading(false);
       }
-      useAuthStore.getState().setLoading(false);
-      return result;
     },
     retry: false,
-    staleTime: 1000 * 60 * 5, // 5 min
+    staleTime: Infinity,
     refetchOnWindowFocus: false,
+    enabled: !accessToken,
   });
 }
 

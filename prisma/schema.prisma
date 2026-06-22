@@ -2,8 +2,26 @@ generator client {
   provider = "prisma-client-js"
 }
 
+generator client_backend {
+  provider = "prisma-client-js"
+  output   = "../backend/node_modules/.prisma/client"
+}
+
 datasource db {
   provider = "postgresql"
+}
+
+model AcademicYear {
+  id        String    @id @default(uuid())
+  name      String    @unique // Contoh: "2025/2026"
+  isActive  Boolean   @default(false)
+  createdAt DateTime  @default(now())
+  students  Student[]
+}
+
+model Sequence {
+  id    String @id // Contoh: "NIS_2026", "PPDB_2025"
+  value Int
 }
 
 /// This table has subclasses and requires additional setup for migrations. Visit https://pris.ly/d/table-inheritance for more info.
@@ -25,7 +43,7 @@ model ActivityLog {
 }
 
 model Document {
-  id           String         @id
+  id           String         @id @default(uuid())
   studentId    String
   uploadedById String
   type         DocumentType
@@ -33,22 +51,42 @@ model Document {
   storedName   String
   mimeType     String
   sizeBytes    Int
-  status       DocumentStatus @default(VERIFIKASI)
+  status       DocumentStatus @default(UPLOADED)
   storagePath  String
+  fileData     Bytes?
   ocrResult    Json?
   ocrStatus    OcrStatus      @default(PENDING)
+  ocrConfidence Float?
+  reviewStatus  ReviewStatus   @default(PENDING)
   ocrRunAt     DateTime?
   uploadedAt   DateTime       @default(now())
+  version      Int            @default(1)
+  isLatest     Boolean        @default(true)
+  previousId   String?
+  deletedAt    DateTime?
+  deletedBy    String?
+  verificationNotes String?   @map("verification_notes")
+  verifiedBy        String?   @map("verified_by")
+  verifiedAt        DateTime? @map("verified_at")
+  
   Student      Student        @relation(fields: [studentId], references: [id], onDelete: Cascade)
   User         User           @relation(fields: [uploadedById], references: [id])
+  previous     Document?      @relation("DocumentLineage", fields: [previousId], references: [id])
+  nextVersions Document[]     @relation("DocumentLineage")
 
+  @@index([deletedAt])
   @@index([studentId])
+  @@index([uploadedById])
   @@index([status])
+  @@index([previousId])
+  @@index([type])
+  @@index([ocrStatus])
+  @@index([studentId, type, isLatest])
 }
 
 model Guardian {
-  id              String  @id
-  studentId       String  @unique
+  id              String    @id @default(uuid())
+  studentId       String    @unique
   namaAyah        String?
   pekerjaanAyah   String?
   ktpAyah         String?
@@ -59,7 +97,36 @@ model Guardian {
   teleponIbu      String?
   teleponOrangTua String?
   alamatOrangTua  String?
-  Student         Student @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  pendidikanAyah  String?
+  pendidikanIbu   String?
+  statusAyah      ParentStatus  @default(MASIH_HIDUP)
+  statusIbu       ParentStatus  @default(MASIH_HIDUP)
+  namaWali        String?
+  hubunganWali    String?
+  teleponWali     String?
+  alamatWali      String?
+  deletedAt       DateTime?
+  deletedBy       String?
+  Student         Student   @relation(fields: [studentId], references: [id], onDelete: Cascade)
+
+  @@index([deletedAt])
+}
+
+model RefreshToken {
+  id        String    @id @default(uuid())
+  userId    String
+  tokenHash String
+  family    String
+  expiresAt DateTime
+  revokedAt DateTime?
+  createdAt DateTime  @default(now())
+
+  User User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([tokenHash])
+  @@index([family])
+  @@index([expiresAt])
 }
 
 model Role {
@@ -69,47 +136,140 @@ model Role {
 }
 
 model Student {
-  id           String        @id
-  nisn         String        @unique
-  nama         String
-  kelas        String
-  jurusan      String
-  email        String
-  telepon      String
-  alamat       String
-  tanggalLahir DateTime
-  status       StudentStatus @default(AKTIF)
-  catatan      String?
-  createdAt    DateTime      @default(now())
-  updatedAt    DateTime      @updatedAt
-  Document     Document[]
-  Guardian     Guardian?
+  id                 String                 @id @default(uuid())
+  nisSekolah         String?                @unique
+  nisn               String?                @unique
+  registrationNumber String?                @unique
+  nik                String?
+  nomorKK            String?
+  namaPanggilan      String?
+  jenisKelamin       JenisKelamin?
+  tempatLahir        String?
+  asalSekolah        String?
+  tahunLulusSebelumnya Int?
+  anakKe             Int?
+  jumlahSaudara      Int?
+  photoUrl           String?
+  angkatan           Int
+  nama               String
+  kelas              String
+  jurusan            String
+  email              String
+  telepon            String
+  alamat             String
+  tanggalLahir       DateTime
+  status             StudentStatus          @default(AKTIF)
+  catatan            String?
+  createdAt          DateTime               @default(now())
+  updatedAt          DateTime               @updatedAt
+  deletedAt          DateTime?
+  deletedBy          String?
+  graduationYear     Int?
+  certificateNumber  String?
 
+  academicYearId     String
+  AcademicYear       AcademicYear           @relation(fields: [academicYearId], references: [id])
+
+  Document           Document[]
+  Guardian           Guardian?
+  Timeline           StudentTimeline[]
+  StatusHistory      StudentStatusHistory[]
+  Notes              StudentNote[]
+
+  @@index([deletedAt])
   @@index([kelas])
   @@index([status])
   @@index([jurusan])
+  @@index([academicYearId])
+  @@index([angkatan])
+  @@index([nama])
 }
 
 model User {
-  id           String        @id
-  name         String
-  email        String        @unique
-  passwordHash String
-  isActive     Boolean       @default(true)
-  createdAt    DateTime      @default(now())
-  updatedAt    DateTime      @updatedAt
-  roleId       String
-  ActivityLog  ActivityLog[]
-  Document     Document[]
-  Role         Role          @relation(fields: [roleId], references: [id])
+  id                  String                 @id @default(uuid())
+  name                String
+  email               String                 @unique
+  passwordHash        String
+  isActive            Boolean                @default(true)
+  failedLoginAttempts Int                    @default(0)
+  lockedUntil         DateTime?
+  createdAt           DateTime               @default(now())
+  updatedAt           DateTime               @updatedAt
+  roleId              String
+  deletedAt           DateTime?
+  deletedBy           String?
+  ActivityLog         ActivityLog[]
+  Document            Document[]
+  Role                Role                   @relation(fields: [roleId], references: [id])
+  RefreshToken        RefreshToken[]
+  StatusHistory       StudentStatusHistory[]
+  Notes               StudentNote[]
 
   @@index([roleId])
+  @@index([deletedAt])
+}
+
+model StudentTimeline {
+  id        String   @id @default(uuid())
+  studentId String
+  event     String   // e.g. "Pendaftaran", "Mutasi Status", "Kenaikan Kelas"
+  details   String   // Deskripsi peristiwa
+  createdAt DateTime @default(now())
+  Student   Student  @relation(fields: [studentId], references: [id], onDelete: Cascade)
+
+  @@index([studentId])
+  @@index([createdAt])
+}
+
+model StudentStatusHistory {
+  id          String        @id @default(uuid())
+  studentId   String
+  status      StudentStatus
+  changedById String
+  reason      String
+  createdAt   DateTime      @default(now())
+  
+  Student     Student       @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  ChangedBy   User          @relation(fields: [changedById], references: [id])
+
+  @@index([studentId])
+  @@index([changedById])
+}
+
+enum NoteVisibility {
+  INTERNAL
+  PUBLIC
+}
+
+model StudentNote {
+  id         String         @id @default(uuid())
+  studentId  String
+  authorId   String
+  content    String
+  visibility NoteVisibility @default(INTERNAL)
+  isPinned   Boolean        @default(false)
+  createdAt  DateTime       @default(now())
+  updatedAt  DateTime       @updatedAt
+
+  Student    Student        @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  Author     User           @relation(fields: [authorId], references: [id])
+
+  @@index([studentId])
+  @@index([authorId])
+}
+
+model DocumentRequirement {
+  id         String       @id @default(uuid())
+  type       DocumentType @unique
+  isRequired Boolean      @default(true)
+  createdAt  DateTime     @default(now())
+  updatedAt  DateTime     @updatedAt
 }
 
 enum DocumentStatus {
-  TERARSIP
-  VERIFIKASI
-  DITOLAK
+  UPLOADED
+  VERIFIED
+  REJECTED
 }
 
 enum OcrStatus {
@@ -120,13 +280,18 @@ enum OcrStatus {
 }
 
 enum DocumentType {
-  IJAZAH
-  KARTU_KELUARGA
-  AKTA_KELAHIRAN
+  KK
+  AKTA
+  IJAZAH_TERAKHIR
+  RAPORT
   PAS_FOTO
-  RAPOR
   KTP_AYAH
   KTP_IBU
+  SURAT_PINDAH
+  SERTIFIKAT
+  PRAKERIN
+  SKL
+  PENDUKUNG
 }
 
 enum LogCategory {
@@ -134,17 +299,42 @@ enum LogCategory {
   DOKUMEN
   HAK_AKSES
   AUTENTIKASI
+  BACKUP
 }
 
 enum RoleName {
   SUPER_ADMIN
-  STAFF_TU
   GURU
 }
 
 enum StudentStatus {
+  PENDAFTAR
   AKTIF
+  CUTI
+  LULUS
+  KELUAR
   ALUMNI
-  PINDAHAN
-  NON_AKTIF
+}
+
+enum ReviewStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+model SystemSetting {
+  id        String   @id @default(uuid())
+  key       String   @unique
+  value     String   @db.Text
+  updatedAt DateTime @updatedAt
+}
+
+enum ParentStatus {
+  MASIH_HIDUP
+  MENINGGAL
+}
+
+enum JenisKelamin {
+  LAKI_LAKI
+  PEREMPUAN
 }

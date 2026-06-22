@@ -18,18 +18,25 @@
  *   - handleBackupGoogleDrive                → useBackupGoogleDrive
  */
 
-import React from 'react';
+import React, { useCallback, useMemo } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
+import { queryKeys } from './lib/queryKeys';
+import { getFriendlyErrorMessage } from './lib/error';
 
 // Zustand stores (UI state — not server data)
-import { useAuthStore, getActiveUserLabel } from './stores/auth.store';
+import { useAuthStore } from './stores/auth.store';
+import { useToastStore } from './stores/toast.store';
+import { ToastContainer } from './components/ToastContainer';
 import { useUIStore } from './stores/ui.store';
+import type { AppView } from './stores/ui.store';
 import { useSyncStore } from './stores/sync.store';
+import { useStudentFormStore } from './stores/studentForm.store';
 
 // React Query hooks
 import { useSessionQuery, useLogoutMutation } from './hooks/useAuth';
-import { useStudents, useCreateStudent, useUpdateStudent, useReplaceStudents } from './hooks/useStudents';
-import { useActivityLogs, useAddLog, useNotifications, useAddNotification, useMarkAllNotificationsRead, useClearNotification } from './hooks/useActivity';
-import { useSyncGoogleSheets, useBackupGoogleDrive } from './hooks/useSync';
+import { useStudents, useCreateStudent, useUpdateStudent, useDeleteStudent, useReplaceStudents } from './hooks/useStudents';
+import { useActivityLogs, useNotifications, useAddNotification, useMarkAllNotificationsRead, useClearNotification } from './hooks/useActivity';
+
 
 // Types
 import { Student, RoleType } from './types';
@@ -41,43 +48,134 @@ import StudentDirectoryView from './components/StudentDirectoryView';
 import StudentFormView from './components/StudentFormView';
 import SecurityAndAccessView from './components/SecurityAndAccessView';
 import ActivityLogView from './components/ActivityLogView';
+import TrashView from './components/TrashView';
 import NotificationCenter from './components/NotificationCenter';
 import LoginView from './components/LoginView';
+import ViewErrorBoundary from './components/ViewErrorBoundary';
+import BackupRestoreView from './components/BackupRestoreView';
 import { LogOut, Loader2 } from 'lucide-react';
 
+const isViewAllowed = (view: AppView, role: RoleType): boolean => {
+  if (role === 'Super Admin') return true;
+  // Guru / Wali Kelas: can only access dashboard, directory
+  const guruAllowed: AppView[] = ['dashboard', 'directory'];
+  return guruAllowed.includes(view);
+};
+
 export default function App() {
+  const qc = useQueryClient();
+
   // ══ ALL HOOKS MUST BE CALLED UNCONDITIONALLY (Rules of Hooks) ══════════
   // Auth: session check + logout
   useSessionQuery();
-  const { accessToken, isLoading, selectedRole, user, setSimulatedRole } = useAuthStore();
+  const { accessToken, isLoading, selectedRole, user, setSimulatedRole, actorName } = useAuthStore();
   const logoutMutation = useLogoutMutation();
+  const addToast = useToastStore((state) => state.addToast);
 
   // Zustand: UI state
   const { currentView, setCurrentView, editingStudentId, navigateToEdit, navigateToDirectory } = useUIStore();
-  const { driveStatus, sheetsStatus, notifCenterOpen, toggleNotifCenter, setNotifCenterOpen } = useSyncStore();
+  const { notifCenterOpen, toggleNotifCenter, setNotifCenterOpen } = useSyncStore();
 
   // React Query: server data
-  const { data: students = [] } = useStudents();
+  const studentsQuery = useStudents();
+  const students = studentsQuery.data?.data ?? [];
   const { data: logs = [] } = useActivityLogs();
   const { data: notifications = [] } = useNotifications();
 
-  // Mutation hooks
-  const addLog = useAddLog();
+  // Mutation hooks (addLog removed — Phase 2 audit log integrity)
   const addNotification = useAddNotification();
-  const syncSheets = useSyncGoogleSheets();
-  const backupDrive = useBackupGoogleDrive();
   const markAllRead = useMarkAllNotificationsRead();
   const clearNotif = useClearNotification();
   const createStudent = useCreateStudent();
   const updateStudent = useUpdateStudent();
+  const deleteStudent = useDeleteStudent();
   const replaceStudents = useReplaceStudents();
 
   // ── Derived state ───────────────────────────────────────────────────────
-  const isSyncingSheets = syncSheets.isPending;
-  const isSyncingDrive = backupDrive.isPending;
-  const editingStudent = editingStudentId
-    ? students.find((s) => s.id === editingStudentId) ?? null
-    : null;
+  const editingStudent = useMemo(
+    () => editingStudentId ? students.find((s) => s.id === editingStudentId) ?? null : null,
+    [editingStudentId, students],
+  );
+
+  // ── Event handlers (must be before early returns — Rules of Hooks) ─────
+
+  const handleRoleChange = useCallback((role: RoleType) => {
+    setSimulatedRole(role);
+    addNotification.mutate({
+      title: 'Sesi Dirubah',
+      message: `Sessi login browser berganti menjadi ${role}. Sistem menyelaraskan pembatasan enkripsi data.`,
+      type: 'info',
+    });
+    if (!isViewAllowed(currentView, role)) {
+      setCurrentView('dashboard');
+    }
+  }, [setSimulatedRole, addNotification, currentView, setCurrentView]);
+
+
+
+  const handleTriggerEdit = useCallback((student: Student) => {
+    navigateToEdit(student.id);
+  }, [navigateToEdit]);
+
+  // handleAddLog removed — Phase 2 audit log integrity.
+  // All audit logs are now created by backend services.
+
+  const handleAddNotification = useCallback((
+    title: string,
+    message: string,
+    type: 'info' | 'success' | 'warning',
+  ) => {
+    addNotification.mutate({ title, message, type });
+  }, [addNotification]);
+
+  const handleSaveStudent = useCallback(async (savedStudent: Student) => {
+    const isEdit = students.some((s) => s.id === savedStudent.id);
+    const flush = useStudentFormStore.getState().flushPendingUploads;
+
+    if (isEdit) {
+      updateStudent.mutate(savedStudent, {
+        onSuccess: async (saved) => {
+          await flush(saved.id);
+          qc.invalidateQueries({ queryKey: queryKeys.students.all() });
+          handleAddNotification(
+            'Profil Diperbarui',
+            `Data siswa ${saved.nama} berhasil disimpan ke sistem arsip pusat ARBAL.`,
+            'success'
+          );
+          useStudentFormStore.getState().clearForm();
+          navigateToDirectory();
+        },
+        onError: (err: any) => {
+          handleAddNotification(
+            'Gagal Menyimpan',
+            `Perubahan siswa gagal disimpan: ${getFriendlyErrorMessage(err)}`,
+            'warning'
+          );
+        },
+      });
+    } else {
+      createStudent.mutate(savedStudent, {
+        onSuccess: async (created) => {
+          await flush(created.id);
+          qc.invalidateQueries({ queryKey: queryKeys.students.all() });
+          handleAddNotification(
+            'Siswa Terdaftar',
+            `Data siswa ${created.nama} berhasil disimpan ke sistem arsip pusat ARBAL.`,
+            'success'
+          );
+          useStudentFormStore.getState().clearForm();
+          navigateToDirectory();
+        },
+        onError: (err: any) => {
+          handleAddNotification(
+            'Gagal Menyimpan',
+            `Pendaftaran siswa gagal: ${getFriendlyErrorMessage(err)}`,
+            'warning'
+          );
+        },
+      });
+    }
+  }, [students, updateStudent, createStudent, qc, handleAddNotification, navigateToDirectory]);
 
   // ══ Auth gating (AFTER all hooks) ═══════════════════════════════════════
   if (isLoading) {
@@ -94,76 +192,6 @@ export default function App() {
     return <LoginView />;
   }
 
-  // ── Event handlers ───────────────────────────────────────────────────────
-
-  const handleRoleChange = (role: RoleType) => {
-    setSimulatedRole(role);
-    addLog.mutate({
-      action: 'Peralihan Akun',
-      category: 'Hak Akses',
-      details: `Sesi portal berubah menjadi modus peran ${role}.`,
-    });
-    addNotification.mutate({
-      title: 'Sesi Dirubah',
-      message: `Sessi login browser berganti menjadi ${role}. Sistem menyelaraskan pembatasan enkripsi data.`,
-      type: 'info',
-    });
-  };
-
-  const handleSyncGoogleSheets = () => {
-    if (selectedRole === 'Guru / Wali Kelas') {
-      alert('Maaf, peran Guru / Wali Kelas tidak memiliki izin menyelaraskan data kementerian.');
-      return;
-    }
-    syncSheets.mutate(students.length);
-  };
-
-  const handleBackupGoogleDrive = () => {
-    if (selectedRole === 'Guru / Wali Kelas') {
-      alert('Hanya Administrator atau Pengelola Tata Usaha yang diizinkan memicu pencadangan eksternal.');
-      return;
-    }
-    const totalFiles = students.reduce((sum, s) => sum + s.documents.length, 0);
-    backupDrive.mutate(totalFiles);
-  };
-
-  const handleSaveStudent = (savedStudent: Student) => {
-    const isEdit = students.some((s) => s.id === savedStudent.id);
-    if (isEdit) {
-      updateStudent.mutate(savedStudent);
-    } else {
-      createStudent.mutate(savedStudent);
-    }
-    // Flush any pending file uploads for this student
-    const flush = (window as any).__arbalFlushUploads;
-    if (typeof flush === 'function') {
-      flush(savedStudent.id);
-    }
-    navigateToDirectory();
-  };
-
-  const handleTriggerEdit = (student: Student) => {
-    navigateToEdit(student.id);
-  };
-
-  // Backward-compat wrappers so child components keep the same prop API
-  // Phase 1: replace these with direct hook calls inside each component
-  const handleAddLog = (
-    action: string,
-    category: 'Siswa' | 'Dokumen' | 'Hak Akses' | 'Google Drive' | 'Google Sheets',
-    details: string,
-  ) => {
-    addLog.mutate({ action, category, details });
-  };
-
-  const handleAddNotification = (
-    title: string,
-    message: string,
-    type: 'info' | 'success' | 'warning',
-  ) => {
-    addNotification.mutate({ title, message, type });
-  };
-
   return (
     <div className="flex h-screen overflow-hidden bg-slate-50 font-sans">
 
@@ -175,8 +203,6 @@ export default function App() {
           setCurrentView(view);
         }}
         selectedRole={selectedRole}
-        driveStatus={driveStatus}
-        sheetsStatus={sheetsStatus}
       />
 
       {/* 2. Main Workstage Area */}
@@ -196,6 +222,7 @@ export default function App() {
               {currentView === 'inputForm' && (editingStudent ? `Sunting: ${editingStudent.nama}` : 'Input Data Murid Baru')}
               {currentView === 'accessControl' && 'Manajemen Hak Akses & Kebijakan'}
               {currentView === 'activityLog' && 'Log Audit Aktivitas'}
+              {currentView === 'backup' && 'Pusat Backup & Pencadangan Data'}
             </h2>
           </div>
 
@@ -204,14 +231,14 @@ export default function App() {
 
             {/* Active profile */}
             <div className="hidden lg:flex flex-col text-right">
-              <span className="text-xs font-bold text-slate-800">{getActiveUserLabel(selectedRole)}</span>
+              <span className="text-xs font-bold text-slate-800">{actorName}</span>
               <span className="text-[10px] text-emerald-600 font-semibold uppercase tracking-wider">{selectedRole}</span>
             </div>
 
             {/* Role switcher — only SUPER_ADMIN can simulate other roles */}
             {user?.role === 'SUPER_ADMIN' && (
               <div className="flex items-center space-x-2 border-l border-slate-200 pl-4">
-                <span className="text-[10px] font-semibold text-slate-400 uppercase hidden md:inline">Opsi Peran:</span>
+                <span className="text-[10px] font-semibold text-slate-400 uppercase hidden md:inline">Simulasi Peran:</span>
                 <select
                   id="header-role-switcher"
                   value={selectedRole}
@@ -219,7 +246,6 @@ export default function App() {
                   className="bg-slate-50 border border-slate-200 text-slate-700 text-[11px] font-bold py-1.5 px-2.5 rounded-lg focus:outline-none focus:border-emerald-500 cursor-pointer"
                 >
                   <option value="Super Admin">🛡️ Admin</option>
-                  <option value="Staff TU">📝 Staff TU</option>
                   <option value="Guru / Wali Kelas">👨‍🏫 Guru</option>
                 </select>
               </div>
@@ -249,57 +275,72 @@ export default function App() {
         <main className="flex-1 overflow-y-auto p-4 sm:p-6 bg-slate-50">
 
           {currentView === 'dashboard' && (
-            <DashboardView
-              students={students}
-              logs={logs}
-              selectedRole={selectedRole}
-              onViewChange={setCurrentView}
-              onSyncGoogleSheets={handleSyncGoogleSheets}
-              onBackupGoogleDrive={handleBackupGoogleDrive}
-              isSyncingSheets={isSyncingSheets}
-              isSyncingDrive={isSyncingDrive}
-            />
+            <ViewErrorBoundary viewName="Dashboard">
+              <DashboardView
+                students={students}
+                logs={logs}
+                selectedRole={selectedRole}
+                onViewChange={setCurrentView}
+              />
+            </ViewErrorBoundary>
           )}
 
           {currentView === 'directory' && (
-            <StudentDirectoryView
-              students={students}
-              selectedRole={selectedRole}
-              onUpdateStudents={(updated) => replaceStudents.mutate(updated)}
-              onAddLog={handleAddLog}
-              onAddNotification={handleAddNotification}
-              onEditStudent={handleTriggerEdit}
-            />
+            <ViewErrorBoundary viewName="Direktori Siswa">
+              <StudentDirectoryView
+                students={students}
+                selectedRole={selectedRole}
+                onUpdateStudents={(updated) => replaceStudents.mutate(updated)}
+                onAddNotification={handleAddNotification}
+                onEditStudent={handleTriggerEdit}
+                onDeleteStudent={(id) => deleteStudent.mutate(id)}
+              />
+            </ViewErrorBoundary>
           )}
 
           {currentView === 'inputForm' && (
-            <StudentFormView
-              editingStudent={editingStudent}
-              onSaveStudent={handleSaveStudent}
-              onCancel={navigateToDirectory}
-              selectedRole={selectedRole}
-              onAddLog={handleAddLog}
-              onAddNotification={handleAddNotification}
-            />
+            <ViewErrorBoundary viewName="Form Siswa">
+              <StudentFormView
+                editingStudent={editingStudent}
+                onSaveStudent={handleSaveStudent}
+                onCancel={navigateToDirectory}
+                selectedRole={selectedRole}
+                onAddNotification={handleAddNotification}
+                isSaving={createStudent.isPending || updateStudent.isPending}
+              />
+            </ViewErrorBoundary>
+          )}
+
+          {currentView === 'trash' && (
+            <ViewErrorBoundary viewName="Tempat Sampah">
+              <TrashView />
+            </ViewErrorBoundary>
           )}
 
           {currentView === 'accessControl' && (
-            <SecurityAndAccessView
-              selectedRole={selectedRole}
-              onChangeSimulatedRole={setSimulatedRole}
-              onAddLog={handleAddLog}
-              onAddNotification={handleAddNotification}
-            />
+            <ViewErrorBoundary viewName="Manajemen Akses">
+              <SecurityAndAccessView
+                selectedRole={selectedRole}
+                onAddNotification={handleAddNotification}
+              />
+            </ViewErrorBoundary>
           )}
 
           {currentView === 'activityLog' && (
-            <ActivityLogView
-              logs={logs}
-              onSyncGoogleSheets={handleSyncGoogleSheets}
-              isSyncing={isSyncingSheets}
-            />
+            <ViewErrorBoundary viewName="Log Aktivitas">
+              <ActivityLogView
+                logs={logs}
+              />
+            </ViewErrorBoundary>
+          )}
+
+          {currentView === 'backup' && (
+            <ViewErrorBoundary viewName="Pusat Backup">
+              <BackupRestoreView />
+            </ViewErrorBoundary>
           )}
         </main>
+        <ToastContainer />
       </div>
     </div>
   );

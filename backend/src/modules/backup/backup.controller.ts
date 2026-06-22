@@ -1,0 +1,101 @@
+import {
+  Controller,
+  Post,
+  Get,
+  Delete,
+  Param,
+  Req,
+  UseGuards,
+  Res,
+} from '@nestjs/common';
+import { AuthGuard } from '@nestjs/passport';
+import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
+import { Response } from 'express';
+import { BackupService } from './backup.service';
+import { Permissions } from '../../common/decorators/permissions.decorator';
+import { PermissionsGuard } from '../../common/guards/permissions.guard';
+
+@ApiTags('Backup')
+@ApiBearerAuth()
+@Controller('backup')
+@UseGuards(AuthGuard('jwt'), PermissionsGuard)
+export class BackupController {
+  constructor(private backupService: BackupService) {}
+
+  /**
+   * POST /api/v1/backup — manual backup trigger
+   * Reserved for SUPER_ADMIN (backup.manage permission)
+   */
+  @Post()
+  @Permissions('backup.manage')
+  @ApiOperation({ summary: 'Créer un backup manuel (ZIP: DB + uploads)' })
+  async createManualBackup(@Req() req: any) {
+    const result = await this.backupService.createBackup(req.user.id);
+    return {
+      message: 'Backup créé avec succès',
+      ...result,
+    };
+  }
+
+  /**
+   * GET /api/v1/backup — list all available backups
+   */
+  @Get()
+  @Permissions('backup.manage')
+  @ApiOperation({ summary: 'Lister tous les backups disponibles' })
+  async listBackups() {
+    return this.backupService.listBackups();
+  }
+
+  /**
+   * GET /api/v1/backup/download/:fileName — download a backup file
+   */
+  @Get('download/:fileName')
+  @Permissions('backup.manage')
+  @ApiOperation({ summary: 'Download a backup file' })
+  async download(@Param('fileName') fileName: string, @Req() req: any, @Res() res: Response) {
+    await this.backupService.logDownload(fileName, req.user.id);
+    const filePath = this.backupService.getBackupFilePath(fileName);
+    
+    const match = fileName.match(/(\d{4}-\d{2}-\d{2})T(\d{2})-(\d{2})-(\d{2})-(\d{3}Z)/);
+    let friendlyName = fileName;
+    if (match) {
+      const isoString = `${match[1]}T${match[2]}:${match[3]}:${match[4]}.${match[5]}`;
+      try {
+        const date = new Date(isoString);
+        const pad = (n: number) => String(n).padStart(2, '0');
+        const year = date.getFullYear();
+        const month = pad(date.getMonth() + 1);
+        const day = pad(date.getDate());
+        const hours = pad(date.getHours());
+        const minutes = pad(date.getMinutes());
+        friendlyName = `ARBAL_BACKUP_${year}-${month}-${day}_${hours}-${minutes}.zip`;
+      } catch (e) {
+        // Fallback
+      }
+    }
+    
+    res.download(filePath, friendlyName);
+  }
+
+  /**
+   * POST /api/v1/backup/restore/:fileName — restore from a backup file
+   * WARNING: This will replace current data!
+   */
+  @Post('restore/:fileName')
+  @Permissions('backup.manage')
+  @ApiOperation({ summary: 'Restore database and uploads from a backup file' })
+  async restore(@Param('fileName') fileName: string, @Req() req: any) {
+    return this.backupService.restoreFromBackup(fileName, req.user.id);
+  }
+
+  /**
+   * DELETE /api/v1/backup/:fileName — delete a backup file
+   */
+  @Delete(':fileName')
+  @Permissions('backup.manage')
+  @ApiOperation({ summary: 'Delete a backup file' })
+  async delete(@Param('fileName') fileName: string, @Req() req: any) {
+    return this.backupService.deleteBackup(fileName, req.user.id);
+  }
+}

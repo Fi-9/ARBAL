@@ -1,8 +1,7 @@
-import { Controller, Get, Post, Query, Body, UseGuards, DefaultValuePipe, ParseIntPipe } from '@nestjs/common';
+import { Controller, Get, Query, UseGuards, DefaultValuePipe, ParseIntPipe } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
-import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
+import { ApiTags, ApiBearerAuth } from '@nestjs/swagger';
 import { ActivityService } from './activity.service';
-import { CreateLogDto } from './dto/activity.dto';
 import { Permissions } from '../../common/decorators/permissions.decorator';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
 
@@ -22,9 +21,7 @@ export class ActivityController {
     return this.activityService.findAll(page, limit);
   }
 
-  @Post()
-  @ApiOperation({ summary: 'Create an activity log entry' })
-  async create(@Body() body: CreateLogDto) {
-    return this.activityService.create(body);
-  }
+  // POST /logs has been removed (Phase 2 — Audit Log Integrity).
+  // All audit log entries are now created exclusively by backend services
+  // (auth, students, documents, users, backup) to prevent actor spoofing.
 }

@@ -1,9 +1,6 @@
-import pg from 'pg';
+import { createDbClient } from './_db.mjs';
 
-const client = new pg.Client({
-  connectionString: 'postgresql://adminmustaqbal:mustaqbaldb155@192.168.100.55:5432/arbal_db',
-  connectionTimeoutMillis: 8000,
-});
+const client = createDbClient({ connectionTimeoutMillis: 8000 });
 
 await client.connect();
 

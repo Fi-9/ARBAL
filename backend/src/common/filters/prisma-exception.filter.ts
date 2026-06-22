@@ -25,11 +25,28 @@ export class PrismaExceptionFilter implements ExceptionFilter {
     let message = 'Internal server error';
 
     switch (exception.code) {
-      case 'P2002':
+      case 'P2002': {
         status = HttpStatus.CONFLICT;
-        const fields = (exception.meta?.target as string[])?.join(', ') ?? 'field';
-        message = `A record with this ${fields} already exists`;
+        const meta = exception.meta as any;
+        const targets = (meta?.target as string[]) ?? 
+                        (meta?.driverAdapterError?.cause?.constraint?.fields as string[]) ?? 
+                        [];
+        if (targets.includes('email')) {
+          message = 'Surel (email) sudah terdaftar dalam sistem.';
+        } else if (targets.includes('nisn')) {
+          message = 'NISN sudah terdaftar dalam sistem.';
+        } else if (targets.includes('nisSekolah')) {
+          message = 'NIS Sekolah sudah terdaftar dalam sistem.';
+        } else if (targets.includes('registrationNumber')) {
+          message = 'Nomor PPDB sudah terdaftar dalam sistem.';
+        } else {
+          const fields = targets.join(', ');
+          message = fields 
+            ? `Data dengan ${fields} ini sudah terdaftar dalam sistem.`
+            : 'Data dengan nilai ini sudah terdaftar dalam sistem.';
+        }
         break;
+      }
 
       case 'P2025':
         status = HttpStatus.NOT_FOUND;

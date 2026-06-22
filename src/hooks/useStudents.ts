@@ -20,28 +20,37 @@
 
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Student } from '../types';
-import { studentService } from '../services/student.service';
+import { studentService, StudentQueryParams, PaginatedStudents } from '../services/student.service';
 import { queryKeys } from '../lib/queryKeys';
+import { useAuthStore } from '../stores/auth.store';
 
 // ---------------------------------------------------------------------------
 // Query hooks
 // ---------------------------------------------------------------------------
 
-export function useStudentsQuery() {
+export function useStudentsQuery(params?: StudentQueryParams) {
+  const accessToken = useAuthStore((s) => s.accessToken);
   return useQuery({
-    queryKey: queryKeys.students.all(),
-    queryFn: studentService.getAll,
+    queryKey: [...queryKeys.students.all(), params ?? {}],
+    queryFn: () => studentService.getAll(params),
+    enabled: !!accessToken,
   });
 }
 
-/** Backward-compat alias — keeps existing callers in App.tsx working */
+/** Backward-compat alias — returns just the data array (for components that don't need pagination meta) */
 export const useStudents = useStudentsQuery;
 
+/** Hook returning full paginated response (for components that need total/page info) */
+export function useStudentsPaginated(params?: StudentQueryParams) {
+  return useStudentsQuery(params) as ReturnType<typeof useQuery<PaginatedStudents>>;
+}
+
 export function useStudentQuery(id: string | null) {
+  const accessToken = useAuthStore((s) => s.accessToken);
   return useQuery({
     queryKey: queryKeys.students.byId(id ?? ''),
     queryFn: () => studentService.getById(id!),
-    enabled: !!id,
+    enabled: !!id && !!accessToken,
   });
 }
 
@@ -79,8 +88,10 @@ export function useDeleteStudentMutation() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: studentService.remove,
-    onSuccess: () =>
-      qc.invalidateQueries({ queryKey: queryKeys.students.all() }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: queryKeys.students.all() });
+      qc.invalidateQueries({ queryKey: ['students', 'trash'] });
+    },
   });
 }
 
@@ -91,8 +102,8 @@ export function useReplaceStudentsMutation() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (updated: Student[]) => studentService.replaceAll(updated),
-    onSuccess: (data) => {
-      qc.setQueryData(queryKeys.students.all(), data);
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: queryKeys.students.all() });
     },
   });
 }

@@ -4,9 +4,12 @@
  *
  * Activity logs and notification hooks — React Query layer.
  *
+ * Phase 2 — Audit Log Integrity:
+ *   useAddLogMutation / useAddLog have been removed.
+ *   All audit log creation is now handled by backend services.
+ *
  * NAMING CONVENTION:
  *   useActivityLogsQuery()            → read logs
- *   useAddLogMutation()               → append a log entry
  *   useNotificationsQuery()           → read notifications
  *   useAddNotificationMutation()      → create a notification
  *   useMarkAllNotificationsReadMutation()
@@ -14,59 +17,41 @@
  */
 
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { ActivityLog, RoleType, SystemNotification } from '../types';
+import { SystemNotification } from '../types';
 import { activityService, notificationService } from '../services/activity.service';
 import { useAuthStore } from '../stores/auth.store';
 import { useSyncStore } from '../stores/sync.store';
 import { queryKeys } from '../lib/queryKeys';
 
 // ---------------------------------------------------------------------------
-// Activity Logs
+// Activity Logs (read-only)
 // ---------------------------------------------------------------------------
 
 export function useActivityLogsQuery() {
+  const accessToken = useAuthStore((s) => s.accessToken);
   return useQuery({
     queryKey: queryKeys.activity.logs(),
     queryFn: activityService.getLogs,
+    enabled: !!accessToken,
   });
 }
 
 /** Backward-compat alias */
 export const useActivityLogs = useActivityLogsQuery;
 
-export function useAddLogMutation() {
-  const qc = useQueryClient();
-  const { actorName, selectedRole } = useAuthStore();
-
-  return useMutation({
-    mutationFn: ({
-      action,
-      category,
-      details,
-    }: {
-      action: string;
-      category: ActivityLog['category'];
-      details: string;
-      actorName?: string;
-      actorRole?: RoleType;
-    }) =>
-      activityService.addLog(action, category, details, actorName, selectedRole),
-    onSuccess: () =>
-      qc.invalidateQueries({ queryKey: queryKeys.activity.logs() }),
-  });
-}
-
-/** Backward-compat alias */
-export const useAddLog = useAddLogMutation;
+// useAddLogMutation / useAddLog have been intentionally removed.
+// All audit logs are created by backend services (Phase 2 remediation).
 
 // ---------------------------------------------------------------------------
 // Notifications
 // ---------------------------------------------------------------------------
 
 export function useNotificationsQuery() {
+  const accessToken = useAuthStore((s) => s.accessToken);
   return useQuery({
     queryKey: queryKeys.notifications.all(),
     queryFn: notificationService.getAll,
+    enabled: !!accessToken,
   });
 }
 

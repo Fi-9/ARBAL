@@ -6,6 +6,10 @@ import { AuthModule } from './modules/auth/auth.module';
 import { StudentsModule } from './modules/students/students.module';
 import { ActivityModule } from './modules/activity/activity.module';
 import { DocumentsModule } from './modules/documents/documents.module';
+import { BackupModule } from './modules/backup/backup.module';
+import { DashboardModule } from './modules/dashboard/dashboard.module';
+import { UsersModule } from './modules/users/users.module';
+import { HealthModule } from './modules/health/health.module';
 
 @Module({
   imports: [
@@ -19,6 +23,10 @@ import { DocumentsModule } from './modules/documents/documents.module';
     StudentsModule,
     ActivityModule,
     DocumentsModule,
+    BackupModule,
+    DashboardModule,
+    UsersModule,
+    HealthModule,
   ],
   providers: [
     // Apply ThrottlerGuard globally

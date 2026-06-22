@@ -43,12 +43,20 @@ api.interceptors.request.use((config: InternalAxiosRequestConfig) => {
 // ---------------------------------------------------------------------------
 
 let _isRefreshing = false;
-let _refreshQueue: Array<(token: string) => void> = [];
+let _refreshQueue: Array<{ resolve: (token: string) => void; reject: (error: any) => void }> = [];
 
 const processQueue = (token: string) => {
-  _refreshQueue.forEach((cb) => cb(token));
+  _refreshQueue.forEach((cb) => cb.resolve(token));
   _refreshQueue = [];
 };
+
+const rejectQueue = (error: any) => {
+  _refreshQueue.forEach((cb) => cb.reject(error));
+  _refreshQueue = [];
+};
+
+/** Endpoints that should NEVER trigger the auto-refresh flow — would cause infinite loop */
+const NO_REFRESH_PATHS = ['/auth/refresh', '/auth/login', '/auth/logout'];
 
 api.interceptors.response.use(
   (response) => response,
@@ -58,12 +66,19 @@ api.interceptors.response.use(
       _retry?: boolean;
     };
 
-    if (error.response?.status === 401 && !originalRequest._retry) {
+    // Don't try to refresh on auth endpoints — that would cause infinite recursion
+    const url = originalRequest?.url ?? '';
+    const isAuthEndpoint = NO_REFRESH_PATHS.some((path) => url.includes(path));
+
+    if (error.response?.status === 401 && !originalRequest._retry && !isAuthEndpoint) {
       if (_isRefreshing) {
-        return new Promise((resolve) => {
-          _refreshQueue.push((token) => {
-            originalRequest.headers.Authorization = `Bearer ${token}`;
-            resolve(api(originalRequest));
+        return new Promise((resolve, reject) => {
+          _refreshQueue.push({
+            resolve: (token) => {
+              originalRequest.headers.Authorization = `Bearer ${token}`;
+              resolve(api(originalRequest));
+            },
+            reject: (err) => reject(err),
           });
         });
       }
@@ -76,8 +91,9 @@ api.interceptors.response.use(
         originalRequest.headers.Authorization = `Bearer ${data.accessToken}`;
         return api(originalRequest);
       } catch (refreshError) {
+        // Refresh failed — reject all queued requests and clear session
+        rejectQueue(refreshError);
         useAuthStore.getState().clearSession();
-        window.location.href = '/login';
         return Promise.reject(refreshError);
       } finally {
         _isRefreshing = false;

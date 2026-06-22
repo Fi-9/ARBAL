@@ -19,6 +19,10 @@ def parse_kk(raw_text: str) -> dict:
     Returns:
         Dict with extracted fields and list of family members
     """
+    # Input length cap to prevent ReDoS on excessively long text
+    if len(raw_text) > 10_000:
+        raw_text = raw_text[:10_000]
+
     text = raw_text.replace("\r", "").strip()
     lines = [line.strip() for line in text.split("\n") if line.strip()]
     full_text = " ".join(lines)

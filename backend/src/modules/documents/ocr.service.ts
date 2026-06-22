@@ -1,14 +1,14 @@
-import { Injectable, Logger, BadRequestException, ServiceUnavailableException } from '@nestjs/common';
+import { Injectable, Logger, BadRequestException, ServiceUnavailableException, Inject } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { OcrStatus } from '@prisma/client';
-import { readFileSync, existsSync } from 'fs';
 import { basename } from 'path';
+import { StorageProvider } from './storage/storage-provider.interface';
 
 /**
  * OcrService — proxies document images to the Python OCR microservice.
  *
  * Pipeline:
- *  1. Read stored file from disk
+ *  1. Read stored file from storage
  *  2. POST multipart to Python FastAPI (POST /ocr/ktp or /ocr/kk)
  *  3. Receive parsed JSON result
  *  4. Persist ocrResult + ocrStatus on the Document record
@@ -18,8 +18,20 @@ export class OcrService {
   private readonly logger = new Logger(OcrService.name);
   private readonly ocrBaseUrl: string;
 
-  constructor(private prisma: PrismaService) {
+  constructor(
+    private prisma: PrismaService,
+    @Inject('StorageProvider') private storage: StorageProvider,
+  ) {
     this.ocrBaseUrl = process.env.OCR_SERVICE_URL || 'http://localhost:8000';
+  }
+
+  /** Build common headers for OCR service requests */
+  private getOcrHeaders(contentType?: string): Record<string, string> {
+    const headers: Record<string, string> = {};
+    if (contentType) headers['Content-Type'] = contentType;
+    const token = process.env.OCR_INTERNAL_TOKEN;
+    if (token) headers['X-Internal-Token'] = token;
+    return headers;
   }
 
   /**
@@ -32,16 +44,19 @@ export class OcrService {
       throw new BadRequestException('Document not found');
     }
 
-    if (!existsSync(doc.storagePath)) {
-      throw new BadRequestException('File not found on disk');
-    }
-
     // Determine OCR endpoint based on document type
     const endpoint = this.resolveEndpoint(doc.type);
     if (!endpoint) {
       throw new BadRequestException(
         `OCR is not supported for document type ${doc.type}. Only KTP_AYAH, KTP_IBU, and KARTU_KELUARGA are supported.`,
       );
+    }
+
+    let fileBuffer: Buffer;
+    try {
+      fileBuffer = await this.storage.download(doc.id);
+    } catch {
+      throw new BadRequestException('Document file data not found in storage');
     }
 
     // Mark as processing
@@ -52,7 +67,6 @@ export class OcrService {
 
     try {
       // Build multipart form data
-      const fileBuffer = readFileSync(doc.storagePath);
       const boundary = `----FormBoundary${Date.now()}`;
       const fileName = basename(doc.originalName);
 
@@ -76,9 +90,7 @@ export class OcrService {
 
       const response = await fetch(`${this.ocrBaseUrl}${endpoint}`, {
         method: 'POST',
-        headers: {
-          'Content-Type': `multipart/form-data; boundary=${boundary}`,
-        },
+        headers: this.getOcrHeaders(`multipart/form-data; boundary=${boundary}`),
         body,
         signal: AbortSignal.timeout(60_000), // 60s timeout
       });
@@ -93,12 +105,18 @@ export class OcrService {
 
       const result = await response.json();
 
+      let ocrConfidence = null;
+      if (result && typeof result.confidence === 'number') {
+        ocrConfidence = result.confidence;
+      }
+
       // Persist result in DB
       await this.prisma.document.update({
         where: { id: documentId },
         data: {
           ocrResult: result,
           ocrStatus: OcrStatus.COMPLETED,
+          ocrConfidence,
           ocrRunAt: new Date(),
         },
       });
@@ -114,8 +132,9 @@ export class OcrService {
       if (err instanceof ServiceUnavailableException || err instanceof BadRequestException) {
         throw err;
       }
-      this.logger.error(`OCR extraction failed for document ${documentId}: ${err.message}`);
-      throw new ServiceUnavailableException(`OCR extraction failed: ${err.message}`);
+      // Log full error internally but return generic message to client
+      this.logger.error(`OCR extraction failed for document ${documentId}: ${err.message}`, err.stack);
+      throw new ServiceUnavailableException('OCR extraction failed. Please try again later.');
     }
   }
 
@@ -125,6 +144,7 @@ export class OcrService {
   async healthCheck(): Promise<{ available: boolean; detail?: string }> {
     try {
       const res = await fetch(`${this.ocrBaseUrl}/health`, {
+        headers: this.getOcrHeaders(),
         signal: AbortSignal.timeout(5_000),
       });
       if (res.ok) {
@@ -145,7 +165,7 @@ export class OcrService {
       case 'KTP_AYAH':
       case 'KTP_IBU':
         return '/ocr/ktp';
-      case 'KARTU_KELUARGA':
+      case 'KK':
         return '/ocr/kk';
       default:
         return null;

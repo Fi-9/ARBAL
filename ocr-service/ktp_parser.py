@@ -19,6 +19,10 @@ def parse_ktp(raw_text: str) -> dict:
     Returns:
         Dict with extracted fields (None for fields that couldn't be extracted)
     """
+    # Input length cap to prevent ReDoS on excessively long text
+    if len(raw_text) > 10_000:
+        raw_text = raw_text[:10_000]
+
     # Normalize text: collapse whitespace, fix common OCR misreads in numeric contexts
     text = raw_text.replace("\r", "").strip()
     lines = [line.strip() for line in text.split("\n") if line.strip()]

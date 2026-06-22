@@ -3,7 +3,19 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-export type DocumentType = 'Ijazah' | 'Kartu Keluarga' | 'Akta Kelahiran' | 'Pas Foto' | 'Rapor' | 'KTP Ayah' | 'KTP Ibu';
+export type DocumentType = 
+  | 'Kartu Keluarga' 
+  | 'Akta Kelahiran' 
+  | 'Ijazah Terakhir' 
+  | 'Rapor' 
+  | 'Pas Foto' 
+  | 'KTP Ayah' 
+  | 'KTP Ibu' 
+  | 'Surat Pindah' 
+  | 'Sertifikat Kompetensi' 
+  | 'Laporan Prakerin' 
+  | 'Dokumen Pendukung'
+  | 'Surat Keterangan Lulus'; // SKL
 
 export interface DocumentItem {
   id: string;
@@ -13,14 +25,21 @@ export interface DocumentItem {
   uploadedAt: string;
   status: 'Terarsip' | 'Verifikasi' | 'Belum Lengkap' | 'Ditolak';
   size: string;
+  version?: number;
+  isLatest?: boolean;
+  previousId?: string;
+  verificationNotes?: string;
 }
 
-export type StudentStatus = 'Aktif' | 'Alumni' | 'Pindahan' | 'Non-Aktif';
+export type StudentStatus = 'Pendaftar' | 'Aktif' | 'Cuti' | 'Lulus' | 'Keluar' | 'Alumni';
 
 export interface Student {
   id: string;
   nama: string;
-  nisn: string;
+  nisn?: string;
+  nisSekolah?: string;
+  registrationNumber?: string;
+  angkatan?: number;
   kelas: string;
   jurusan: string;
   email: string;
@@ -31,7 +50,22 @@ export interface Student {
   documents: DocumentItem[];
   catatan?: string;
   createdAt: string;
+  academicYearId?: string;
+  graduationYear?: number;
+  certificateNumber?: string;
   
+  // Biodata Baru
+  nik?: string;
+  nomorKK?: string;
+  namaPanggilan?: string;
+  jenisKelamin?: 'LAKI_LAKI' | 'PEREMPUAN';
+  tempatLahir?: string;
+  asalSekolah?: string;
+  tahunLulusSebelumnya?: number;
+  anakKe?: number;
+  jumlahSaudara?: number;
+  photoUrl?: string;
+
   // Data Orang Tua / Wali
   namaAyah?: string;
   pekerjaanAyah?: string;
@@ -43,9 +77,18 @@ export interface Student {
   teleponIbu?: string;
   teleponOrangTua?: string;
   alamatOrangTua?: string;
+  pendidikanAyah?: string;
+  statusAyah?: 'MASIH_HIDUP' | 'MENINGGAL';
+  pendidikanIbu?: string;
+  statusIbu?: 'MASIH_HIDUP' | 'MENINGGAL';
+  namaWali?: string;
+  hubunganWali?: string;
+  teleponWali?: string;
+  alamatWali?: string;
+  completenessPercent?: number;
 }
 
-export type RoleType = 'Super Admin' | 'Staff TU' | 'Guru / Wali Kelas';
+export type RoleType = 'Super Admin' | 'Guru / Wali Kelas';
 
 export interface AppRole {
   name: RoleType;
@@ -79,4 +122,14 @@ export interface SystemNotification {
   message: string;
   type: 'info' | 'success' | 'warning';
   read: boolean;
+}
+
+export interface UserAccount {
+  id: string;
+  name: string;
+  email: string;
+  isActive: boolean;
+  createdAt: string;
+  updatedAt: string;
+  role: 'SUPER_ADMIN' | 'GURU';
 }

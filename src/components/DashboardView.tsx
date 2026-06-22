@@ -27,19 +27,20 @@ import {
   RefreshCw,
   FolderOpen,
   ArrowRight,
-  Sparkles
+  Sparkles,
+  UploadCloud,
+  AlertTriangle,
+  XCircle,
+  CheckCircle2
 } from 'lucide-react';
 import { Student, ActivityLog, RoleType } from '../types';
+import { useUIStore } from '../stores/ui.store';
 
 interface DashboardViewProps {
   students: Student[];
   logs: ActivityLog[];
   selectedRole: RoleType;
   onViewChange: (view: string) => void;
-  onSyncGoogleSheets: () => void;
-  onBackupGoogleDrive: () => void;
-  isSyncingSheets: boolean;
-  isSyncingDrive: boolean;
 }
 
 export default function DashboardView({
@@ -47,11 +48,8 @@ export default function DashboardView({
   logs,
   selectedRole,
   onViewChange,
-  onSyncGoogleSheets,
-  onBackupGoogleDrive,
-  isSyncingSheets,
-  isSyncingDrive
 }: DashboardViewProps) {
+  const setInitialDirectoryFilter = useUIStore((state) => state.setInitialDirectoryFilter);
 
   // Statistics
   const totalStudents = students.length;
@@ -74,11 +72,9 @@ export default function DashboardView({
     });
   });
 
-  // Calculate completeness score per student (of 5 required documents)
-  // Required: Ijazah, KK, Akta, Pas Foto, Rapor
-  const completeCount = students.filter(s => s.documents.length >= 5).length;
-  const partiallyCompleteCount = students.filter(s => s.documents.length > 0 && s.documents.length < 5).length;
-  const incompleteCount = students.filter(s => s.documents.length === 0).length;
+  // Calculate completeness score per student
+  const completeCount = students.filter(s => s.completenessPercent !== undefined ? s.completenessPercent === 100 : s.documents.length >= 5).length;
+  const incompleteCount = students.filter(s => s.completenessPercent !== undefined ? s.completenessPercent < 100 : s.documents.length < 5).length;
 
   // Chart Data 1: Kelas & Pasukan
   const classesMap: { [key: string]: number } = {};
@@ -99,19 +95,20 @@ export default function DashboardView({
     { name: 'Pindahan/Lain', value: otherStudents, color: '#f59e0b' }
   ].filter(status => status.value > 0);
 
-  // Chart Data 3: Kelengkapan Dokumen Arsip (Ijazah, KK, Akta, Foto, Rapor)
+  // Chart Data 3: Kelengkapan Dokumen Arsip (Ijazah Terakhir, KK, Akta, Foto, Rapor, SKL)
   const docTypeCounts = {
-    'Ijazah': 0,
+    'Ijazah Terakhir': 0,
     'Kartu Keluarga': 0,
     'Akta Kelahiran': 0,
     'Pas Foto': 0,
-    'Rapor': 0
+    'Rapor': 0,
+    'Surat Keterangan Lulus': 0
   };
 
   students.forEach(s => {
     s.documents.forEach(d => {
       if (d.type in docTypeCounts) {
-        docTypeCounts[d.type]++;
+        docTypeCounts[d.type as keyof typeof docTypeCounts]++;
       }
     });
   });
@@ -129,95 +126,132 @@ export default function DashboardView({
         <div>
           <span className="bg-emerald-500/10 text-emerald-400 text-xs px-2.5 py-1 rounded-full font-semibold uppercase tracking-wide inline-flex items-center gap-1 mb-2 border border-emerald-500/20">
             <Sparkles size={12} />
-            Edisi Uji Coba Frontend
+            Portal Manajemen Arsip Siswa
           </span>
           <h2 className="text-2xl font-bold text-white tracking-tight">Selamat Datang di Portal Arsip Siswa</h2>
           <p className="text-slate-300 text-sm mt-1 max-w-2xl">
-            Anda login sebagai <strong className="text-emerald-400 font-semibold">{selectedRole}</strong>. Seluruh fungsionalitas di bawah ini mensimulasikan penyimpanan digital terpusat dengan sinkronisasi Google Workspace dan analisis dokumen AI.
+            Anda login sebagai <strong className="text-emerald-400 font-semibold">{selectedRole}</strong>. Seluruh fungsionalitas di bawah ini mensimulasikan penyimpanan digital terpusat dengan pengarsipan lokal yang aman.
           </p>
         </div>
         
-        {/* Quick Sync trigger buttons */}
+        {/* Quick action buttons — role-aware */}
         <div className="flex flex-wrap items-center gap-2.5">
-          <button
-            id="btn-sync-sheets"
-            onClick={onSyncGoogleSheets}
-            disabled={isSyncingSheets || selectedRole === 'Guru / Wali Kelas'}
-            className="flex items-center space-x-2 bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-white font-medium text-xs px-3.5 py-2.5 rounded-lg border border-slate-700 transition"
-          >
-            <RefreshCw size={14} className={isSyncingSheets ? 'animate-spin text-emerald-400' : 'text-slate-400'} />
-            <span>{isSyncingSheets ? 'Sinkron Sheets...' : 'Sinkron Google Sheets'}</span>
-          </button>
-          
-          <button
-            id="btn-backup-drive"
-            onClick={onBackupGoogleDrive}
-            disabled={isSyncingDrive || selectedRole === 'Guru / Wali Kelas'}
-            className="flex items-center space-x-2 bg-emerald-600 hover:bg-emerald-500 text-slate-100 disabled:opacity-50 font-medium text-xs px-4 py-2.5 rounded-lg shadow-md hover:shadow-emerald-600/10 transition"
-          >
-            <FolderOpen size={14} className={isSyncingDrive ? 'animate-spin text-white' : 'text-emerald-100'} />
-            <span>{isSyncingDrive ? 'Mencadangkan...' : 'Cadangkan Dokumen ke Drive'}</span>
-          </button>
+          {selectedRole === 'Super Admin' ? (
+            <>
+              <button
+                id="btn-quick-add-student"
+                onClick={() => onViewChange('inputForm')}
+                className="flex items-center space-x-2 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs px-4 py-2.5 rounded-lg shadow-md hover:shadow-emerald-600/10 transition"
+              >
+                <Users size={14} className="text-emerald-100" />
+                <span>Tambah Siswa</span>
+              </button>
+
+              <button
+                id="btn-quick-upload-doc"
+                onClick={() => onViewChange('directory')}
+                className="flex items-center space-x-2 bg-slate-700 hover:bg-slate-600 text-slate-200 font-medium text-xs px-3.5 py-2.5 rounded-lg border border-slate-600 transition"
+              >
+                <UploadCloud size={14} className="text-slate-300" />
+                <span>Upload Dokumen</span>
+              </button>
+            </>
+          ) : (
+            <button
+              id="btn-goto-directory-guru"
+              onClick={() => onViewChange('directory')}
+              className="flex items-center space-x-2 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs px-4 py-2.5 rounded-lg shadow-md hover:shadow-emerald-600/10 transition"
+            >
+              <FolderOpen size={14} className="text-emerald-100" />
+              <span>Lihat Direktori Siswa</span>
+            </button>
+          )}
         </div>
       </div>
 
       {/* Info Stats Cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
-        {/* Card 1: Total Students */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-5">
+        {/* Card 1: Total Siswa */}
         <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm flex items-center justify-between">
           <div>
-            <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Total Data Siswa</p>
+            <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Total Siswa</p>
             <h3 className="text-2xl font-bold text-slate-800 mt-1.5">{totalStudents}</h3>
             <p className="text-xs text-slate-500 mt-1">
               <span className="text-emerald-600 font-semibold">{activeStudents} aktif</span> | {alumniStudents} alumni
             </p>
           </div>
-          <div className="bg-blue-50 text-blue-500 p-3 rounded-lg">
+          <div className="bg-blue-50 text-blue-500 p-3 rounded-lg shrink-0">
             <Users size={22} />
           </div>
         </div>
 
-        {/* Card 2: Total Documents */}
-        <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm flex items-center justify-between">
+        {/* Card 2: Arsip Lengkap */}
+        <div 
+          id="card-completeness-lengkap"
+          onClick={() => {
+            setInitialDirectoryFilter({ completeness: 'Lengkap' });
+            onViewChange('directory');
+          }}
+          className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm flex items-center justify-between cursor-pointer hover:border-emerald-500 hover:shadow-md transition group animate-fade-in"
+        >
           <div>
-            <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Dokumen Terunggah</p>
-            <h3 className="text-2xl font-bold text-slate-800 mt-1.5">{totalDocs}</h3>
-            <p className="text-xs text-slate-500 mt-1">
-              <span className="text-sky-600 font-semibold">{verifiedDocs} terarsip</span> | {pendingDocs} verifikasi
+            <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider group-hover:text-emerald-600 transition">Arsip Lengkap</p>
+            <h3 className="text-2xl font-bold text-slate-800 mt-1.5">{completeCount}</h3>
+            <p className="text-[10px] text-slate-500 mt-1">
+              Klik untuk filter direktori
             </p>
           </div>
-          <div className="bg-sky-50 text-sky-500 p-3 rounded-lg">
-            <FileText size={22} />
+          <div className="bg-emerald-50 text-emerald-500 p-3 rounded-lg shrink-0 group-hover:bg-emerald-500 group-hover:text-white transition">
+            <FolderOpen size={22} />
           </div>
         </div>
 
-        {/* Card 3: Completeness Rate */}
-        <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm flex items-center justify-between">
+        {/* Card 3: Belum Lengkap */}
+        <div 
+          id="card-completeness-belum-lengkap"
+          onClick={() => {
+            setInitialDirectoryFilter({ completeness: 'Belum Lengkap' });
+            onViewChange('directory');
+          }}
+          className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm flex items-center justify-between cursor-pointer hover:border-amber-500 hover:shadow-md transition group animate-fade-in"
+        >
           <div>
-            <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Arsip Lengkap (5/5)</p>
-            <h3 className="text-2xl font-bold text-slate-800 mt-1.5">
-              {totalStudents > 0 ? Math.round((completeCount / totalStudents) * 100) : 0}%
-            </h3>
-            <p className="text-xs text-slate-500 mt-1">
-              <span className="text-emerald-600 font-semibold">{completeCount} siswa</span> tuntas arsip lengkap
+            <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider group-hover:text-amber-600 transition">Belum Lengkap</p>
+            <h3 className="text-2xl font-bold text-slate-800 mt-1.5">{incompleteCount}</h3>
+            <p className="text-[10px] text-slate-500 mt-1">
+              Klik untuk filter direktori
             </p>
           </div>
-          <div className="bg-emerald-50 text-emerald-500 p-3 rounded-lg">
-            <ShieldCheck size={22} />
+          <div className="bg-amber-50 text-amber-500 p-3 rounded-lg shrink-0 group-hover:bg-amber-500 group-hover:text-white transition">
+            <AlertTriangle size={22} />
           </div>
         </div>
 
-        {/* Card 4: Action Status / Active Role */}
+        {/* Card 4: Menunggu Verifikasi */}
         <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm flex items-center justify-between">
           <div>
-            <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Keamanan & Peran</p>
-            <h3 className="text-lg font-bold text-slate-800 mt-1.5 truncate max-w-[150px]">{selectedRole}</h3>
+            <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Menunggu Verifikasi</p>
+            <h3 className="text-2xl font-bold text-slate-800 mt-1.5">{pendingDocs}</h3>
             <p className="text-xs text-slate-500 mt-1">
-              Log aktivitas berjalan otomatis
+              Dokumen perlu diperiksa
             </p>
           </div>
-          <div className="bg-purple-50 text-purple-500 p-3 rounded-lg">
-            <Activity size={22} />
+          <div className="bg-indigo-50 text-indigo-500 p-3 rounded-lg shrink-0">
+            <CheckCircle2 size={22} />
+          </div>
+        </div>
+
+        {/* Card 5: Dokumen Ditolak */}
+        <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm flex items-center justify-between">
+          <div>
+            <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Dokumen Ditolak</p>
+            <h3 className="text-2xl font-bold text-slate-800 mt-1.5">{rejectedDocs}</h3>
+            <p className="text-xs text-slate-500 mt-1">
+              Membutuhkan unggah ulang
+            </p>
+          </div>
+          <div className="bg-rose-50 text-rose-500 p-3 rounded-lg shrink-0">
+            <XCircle size={22} />
           </div>
         </div>
       </div>
@@ -311,15 +345,13 @@ export default function DashboardView({
               <p className="text-xs text-slate-500">Log operasional real-time arsip dan dokumen siswa.</p>
             </div>
             
-            {(selectedRole === 'Super Admin' || selectedRole === 'Staff TU') && (
-              <button
-                onClick={() => onViewChange('activityLog')}
-                className="text-xs text-emerald-600 hover:text-emerald-700 font-semibold flex items-center space-x-1 hover:underline"
-              >
-                <span>Lihat Semua Log</span>
-                <ArrowRight size={12} />
-              </button>
-            )}
+            <button
+              onClick={() => onViewChange('activityLog')}
+              className="text-xs text-emerald-600 hover:text-emerald-700 font-semibold flex items-center space-x-1 hover:underline"
+            >
+              <span>Lihat Semua Log</span>
+              <ArrowRight size={12} />
+            </button>
           </div>
 
           <div className="space-y-3">
@@ -349,43 +381,38 @@ export default function DashboardView({
         <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm flex flex-col justify-between">
           <div>
             <h4 className="font-bold text-slate-800 text-sm uppercase tracking-wide mb-3">Panduan Operasional & Aksi Cepat</h4>
-            
+
             <div className="space-y-3 text-xs">
-              <div className="p-3 bg-indigo-50/60 text-indigo-950 rounded-lg border border-indigo-100">
-                <p className="font-bold mb-1">🚀 Simulasi Multi-Akses</p>
+              <div className="p-3 bg-emerald-50/60 text-emerald-950 rounded-lg border border-emerald-100">
+                <p className="font-bold mb-1">📋 Cara Kerja Sistem</p>
                 <p className="leading-relaxed text-slate-600 font-normal">
-                  Gunakan dropdown peran di bagian atas layar untuk mensimulasikan login guru, TU, atau super admin untuk mengetes pembatasan enkripsi data dan aksi edit/delete.
+                  Input data siswa lewat menu <strong>Input Data Siswa</strong> dan unggah dokumen fisik ke <strong>Direktori</strong>.
                 </p>
               </div>
 
-              <div className="p-3 bg-amber-50/60 text-amber-950 rounded-lg border border-amber-100">
-                <p className="font-bold mb-1">🤖 AI Scanner Dokumen</p>
-                <p className="leading-relaxed text-slate-600 font-normal">
-                  Masuk ke menu <strong>Input Data Siswa</strong>, lalu klik tombol AI Scanner untuk mencoba mengekstraksi data siswa otomatis dari foto KK/KTP yang di-upload.
-                </p>
-              </div>
+              {selectedRole === 'Super Admin' && (
+                <div className="p-3 bg-indigo-50/60 text-indigo-950 rounded-lg border border-indigo-100">
+                  <p className="font-bold mb-1">🛡️ Simulasi Akses Guru</p>
+                  <p className="leading-relaxed text-slate-600 font-normal">
+                    Gunakan dropdown peran di bagian atas layar untuk mensimulasikan login Guru dan memeriksa pembatasan data PII dan aksi edit/delete.
+                  </p>
+                </div>
+              )}
             </div>
           </div>
 
-          <div className="pt-4 border-t border-slate-100">
-            {selectedRole !== 'Guru / Wali Kelas' ? (
+          {selectedRole === 'Super Admin' && (
+            <div className="pt-4 border-t border-slate-100">
               <button
+                id="btn-dashboard-add-student"
                 onClick={() => onViewChange('inputForm')}
                 className="w-full flex items-center justify-center space-x-2 bg-slate-900 text-slate-100 hover:bg-slate-800 py-2.5 rounded-lg text-xs font-bold transition shadow-sm"
               >
                 <span>Daftarkan Siswa Baru</span>
                 <ArrowRight size={12} />
               </button>
-            ) : (
-              <button
-                onClick={() => onViewChange('directory')}
-                className="w-full flex items-center justify-center space-x-2 bg-slate-900 text-slate-100 hover:bg-slate-800 py-2.5 rounded-lg text-xs font-bold transition shadow-sm"
-              >
-                <span>Lihat Direktori Siswa</span>
-                <ArrowRight size={12} />
-              </button>
-            )}
-          </div>
+            </div>
+          )}
         </div>
       </div>
     </div>

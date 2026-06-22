@@ -1,0 +1,64 @@
+version: '3.8'
+
+services:
+  # 1. PostgreSQL Database + TimescaleDB
+  db:
+    image: timescale/timescaledb:latest-pg15
+    container_name: arbal-database
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER:-arbal_admin}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-arbal_secure_pass_2026}
+      - POSTGRES_DB=${POSTGRES_DB:-arbal_db}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-arbal_admin} -d ${POSTGRES_DB:-arbal_db}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: always
+
+  # 2. OCR Service (PaddleOCR + Python Uvicorn)
+  ocr:
+    build:
+      context: ./ocr-service
+      dockerfile: Dockerfile
+    container_name: arbal-ocr
+    environment:
+      - PORT=8000
+    restart: always
+
+  # 3. NestJS Backend API
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: arbal-backend
+    environment:
+      - PORT=3001
+      - DATABASE_URL=postgres://${POSTGRES_USER:-arbal_admin}:${POSTGRES_PASSWORD:-arbal_secure_pass_2026}@db:5432/${POSTGRES_DB:-arbal_db}
+      - JWT_SECRET=${JWT_SECRET:-arbal_jwt_secret_key_change_me_in_prod}
+      - JWT_REFRESH_SECRET=${JWT_REFRESH_SECRET:-arbal_jwt_refresh_secret_key_change_me_in_prod}
+      - CORS_ORIGINS=http://localhost,http://localhost:3000,http://192.168.100.112
+      - OCR_SERVICE_URL=http://ocr:8000
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: always
+
+  # 4. React Frontend (served via Nginx and Reverse Proxying /api to Backend)
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        - VITE_API_BASE_URL=/api/v1
+    container_name: arbal-frontend
+    ports:
+      - "3000:80"
+    depends_on:
+      - backend
+    restart: always
+
+volumes:
+  pgdata:

@@ -1,5 +1,6 @@
 import { Controller, Post, Body, Res, Req, HttpCode, HttpStatus } from '@nestjs/common';
 import { ApiTags, ApiOperation } from '@nestjs/swagger';
+import { Throttle } from '@nestjs/throttler';
 import { AuthService } from './auth.service';
 import { LoginDto } from './dto/auth.dto';
 import { Request, Response } from 'express';
@@ -7,7 +8,7 @@ import { Request, Response } from 'express';
 /** Cookie options for the httpOnly refresh token */
 const REFRESH_COOKIE_OPTIONS = {
   httpOnly: true,
-  secure: false, // set true in production with HTTPS
+  secure: process.env.NODE_ENV === 'production',
   sameSite: 'lax' as const,
   maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
   path: '/api/v1/auth',
@@ -19,6 +20,7 @@ export class AuthController {
   constructor(private authService: AuthService) {}
 
   @Post('login')
+  @Throttle({ default: { limit: 5, ttl: 60_000 } }) // Max 5 login attempts per minute per IP
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Login with email and password' })
   async login(
@@ -35,6 +37,7 @@ export class AuthController {
   }
 
   @Post('refresh')
+  @Throttle({ default: { limit: 10, ttl: 60_000 } }) // Max 10 refresh attempts per minute per IP
   @HttpCode(HttpStatus.OK)
   async refresh(
     @Req() req: Request,
@@ -57,15 +60,9 @@ export class AuthController {
   @Post('logout')
   @HttpCode(HttpStatus.OK)
   async logout(@Req() req: Request, @Res({ passthrough: true }) res: Response) {
-    // Best-effort: log the logout event if we can identify the user from the refresh cookie
     const rawRefreshToken = req.cookies?.refreshToken;
     if (rawRefreshToken) {
-      try {
-        const payload = JSON.parse(Buffer.from(rawRefreshToken.split('.')[1], 'base64').toString());
-        if (payload?.sub) await this.authService.logLogout(payload.sub);
-      } catch {
-        // Token malformed or expired — skip logging, still clear session
-      }
+      await this.authService.logout(rawRefreshToken);
     }
 
     res.clearCookie('refreshToken', { path: '/api/v1/auth' });

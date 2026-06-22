@@ -1,30 +1,8 @@
-import { IsString, IsOptional, IsIn } from 'class-validator';
-import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-
-export class CreateLogDto {
-  @ApiPropertyOptional()
-  @IsOptional()
-  @IsString()
-  actorUserId?: string;
-
-  @ApiProperty({ example: 'CREATE_STUDENT' })
-  @IsString()
-  action: string;
-
-  @ApiProperty({ enum: ['SISWA', 'DOKUMEN', 'HAK_AKSES', 'AUTENTIKASI'] })
-  @IsIn(['SISWA', 'DOKUMEN', 'HAK_AKSES', 'AUTENTIKASI'])
-  category: 'SISWA' | 'DOKUMEN' | 'HAK_AKSES' | 'AUTENTIKASI';
-
-  @ApiProperty({ example: 'Student' })
-  @IsString()
-  entityType: string;
-
-  @ApiPropertyOptional()
-  @IsOptional()
-  @IsString()
-  entityId?: string;
-
-  @ApiProperty({ example: 'Created student Ahmad (NISN: 123)' })
-  @IsString()
-  details: string;
-}
+/**
+ * Activity DTO — Phase 2 Audit Log Integrity
+ *
+ * CreateLogDto has been intentionally removed.
+ * All audit log creation is now handled internally by backend services
+ * using ActivityService.logFromUser() or ActivityService.logFromSystem().
+ * No client-facing DTO is needed because the POST /logs endpoint no longer exists.
+ */
