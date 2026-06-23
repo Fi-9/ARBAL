@@ -709,9 +709,14 @@ Gunakan utilitas CLI pg_restore/psql untuk memulihkan database.sql, dan salin/ek
         this.logger.log('Restoring uploads directory...');
         const { rmSync, cpSync } = await import('fs');
         if (existsSync(UPLOADS_DIR)) {
-          rmSync(UPLOADS_DIR, { recursive: true, force: true });
+          const files = readdirSync(UPLOADS_DIR);
+          for (const file of files) {
+            const filePath = resolve(UPLOADS_DIR, file);
+            rmSync(filePath, { recursive: true, force: true });
+          }
+        } else {
+          mkdirSync(UPLOADS_DIR, { recursive: true });
         }
-        mkdirSync(UPLOADS_DIR, { recursive: true });
         cpSync(uploadsBackupPath, UPLOADS_DIR, { recursive: true });
       }
 
