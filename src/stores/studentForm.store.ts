@@ -1,6 +1,123 @@
 import { create } from 'zustand';
 import { Student, StudentStatus } from '../types';
 import { uploadDocument } from '../services/document.service';
+import { getFriendlyErrorMessage } from '../lib/error';
+
+const DB_NAME = 'arbal_pending_files';
+const DB_VERSION = 1;
+const STORE_NAME = 'files';
+
+function getDB(): Promise<IDBDatabase> {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open(DB_NAME, DB_VERSION);
+    request.onupgradeneeded = () => {
+      const db = request.result;
+      if (!db.objectStoreNames.contains(STORE_NAME)) {
+        db.createObjectStore(STORE_NAME, { keyPath: 'key' });
+      }
+    };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+}
+
+export async function saveFileToIndexedDB(key: string, file: File): Promise<void> {
+  try {
+    const db = await getDB();
+    return new Promise((resolve, reject) => {
+      const transaction = db.transaction(STORE_NAME, 'readwrite');
+      const store = transaction.objectStore(STORE_NAME);
+      const putRequest = store.put({ key, file, timestamp: Date.now() });
+      putRequest.onsuccess = () => resolve();
+      putRequest.onerror = () => reject(putRequest.error);
+    });
+  } catch (err) {
+    console.error('IndexedDB save error:', err);
+  }
+}
+
+export async function loadFilesFromIndexedDB(): Promise<Record<string, File>> {
+  try {
+    const db = await getDB();
+    return new Promise((resolve, reject) => {
+      const transaction = db.transaction(STORE_NAME, 'readonly');
+      const store = transaction.objectStore(STORE_NAME);
+      const getAllRequest = store.getAll();
+      getAllRequest.onsuccess = () => {
+        const results = getAllRequest.result || [];
+        const filesMap: Record<string, File> = {};
+        for (const item of results) {
+          filesMap[item.key] = item.file;
+        }
+        resolve(filesMap);
+      };
+      getAllRequest.onerror = () => reject(getAllRequest.error);
+    });
+  } catch (err) {
+    console.error('IndexedDB load error:', err);
+    return {};
+  }
+}
+
+export async function deleteFileFromIndexedDB(key: string): Promise<void> {
+  try {
+    const db = await getDB();
+    return new Promise((resolve, reject) => {
+      const transaction = db.transaction(STORE_NAME, 'readwrite');
+      const store = transaction.objectStore(STORE_NAME);
+      const deleteRequest = store.delete(key);
+      deleteRequest.onsuccess = () => resolve();
+      deleteRequest.onerror = () => reject(deleteRequest.error);
+    });
+  } catch (err) {
+    console.error('IndexedDB delete error:', err);
+  }
+}
+
+export async function clearAllIndexedDB(): Promise<void> {
+  try {
+    const db = await getDB();
+    return new Promise((resolve, reject) => {
+      const transaction = db.transaction(STORE_NAME, 'readwrite');
+      const store = transaction.objectStore(STORE_NAME);
+      const clearRequest = store.clear();
+      clearRequest.onsuccess = () => resolve();
+      clearRequest.onerror = () => reject(clearRequest.error);
+    });
+  } catch (err) {
+    console.error('IndexedDB clear error:', err);
+  }
+}
+
+export async function runIndexedDBTTL(): Promise<void> {
+  try {
+    const db = await getDB();
+    return new Promise((resolve, reject) => {
+      const transaction = db.transaction(STORE_NAME, 'readwrite');
+      const store = transaction.objectStore(STORE_NAME);
+      const getAllRequest = store.getAll();
+      getAllRequest.onsuccess = () => {
+        const results = getAllRequest.result || [];
+        const now = Date.now();
+        const sevenDays = 7 * 24 * 60 * 60 * 1000;
+        let count = 0;
+        for (const item of results) {
+          if (now - item.timestamp > sevenDays) {
+            store.delete(item.key);
+            count++;
+          }
+        }
+        if (count > 0) {
+          console.log(`🧹 Cleaned up ${count} stale pending files from IndexedDB.`);
+        }
+        resolve();
+      };
+      getAllRequest.onerror = () => reject(getAllRequest.error);
+    });
+  } catch (err) {
+    console.error('IndexedDB TTL error:', err);
+  }
+}
 
 export interface DocumentMeta {
   name: string;
@@ -82,19 +199,22 @@ interface StudentFormStore {
 
   // Queue of actual File objects (stored by document type/key)
   pendingFiles: Record<string, File>;
+  uploadProgress: Record<string, number>;
+  uploadErrors: Record<string, string>;
 
   // UI state
   activeTab: 'biodata' | 'akademik' | 'keluarga' | 'dokumen' | 'review';
   loadedStudentId: string | null;
 
   // Actions
-  setField: <K extends keyof Omit<StudentFormStore, 'setField' | 'setDocsUploaded' | 'addPendingFile' | 'removePendingFile' | 'flushPendingUploads' | 'loadStudent' | 'clearForm'>>(key: K, value: StudentFormStore[K]) => void;
+  setField: <K extends keyof Omit<StudentFormStore, 'setField' | 'setDocsUploaded' | 'addPendingFile' | 'removePendingFile' | 'flushPendingUploads' | 'loadStudent' | 'clearForm' | 'loadPendingFilesFromIndexedDB'>>(key: K, value: StudentFormStore[K]) => void;
   setDocsUploaded: (updater: (prev: DocsUploadedState) => DocsUploadedState) => void;
   addPendingFile: (key: string, file: File) => void;
   removePendingFile: (key: string) => void;
-  flushPendingUploads: (studentId: string) => Promise<void>;
+  flushPendingUploads: (studentId: string, singleKey?: string) => Promise<{ success: boolean; failedCount: number }>;
   loadStudent: (student: Student) => void;
   clearForm: () => void;
+  loadPendingFilesFromIndexedDB: () => Promise<void>;
 }
 
 const initialFields = {
@@ -165,6 +285,8 @@ export const useStudentFormStore = create<StudentFormStore>((set) => ({
   ...initialFields,
   docsUploaded: { ...initialDocsUploaded },
   pendingFiles: {},
+  uploadProgress: {},
+  uploadErrors: {},
   activeTab: 'biodata',
   loadedStudentId: null,
 
@@ -173,30 +295,92 @@ export const useStudentFormStore = create<StudentFormStore>((set) => ({
   setDocsUploaded: (updater) =>
     set((state) => ({ docsUploaded: updater(state.docsUploaded) })),
 
-  addPendingFile: (key, file) =>
+  addPendingFile: (key, file) => {
+    if (file.size > 10 * 1024 * 1024) return;
     set((state) => ({
       pendingFiles: { ...state.pendingFiles, [key]: file },
-    })),
+      uploadErrors: { ...state.uploadErrors, [key]: '' },
+      uploadProgress: { ...state.uploadProgress, [key]: 0 },
+    }));
+    saveFileToIndexedDB(key, file);
+  },
 
   removePendingFile: (key) =>
     set((state) => {
       const newFiles = { ...state.pendingFiles };
       delete newFiles[key];
-      return { pendingFiles: newFiles };
+      const newProgress = { ...state.uploadProgress };
+      delete newProgress[key];
+      const newErrors = { ...state.uploadErrors };
+      delete newErrors[key];
+      deleteFileFromIndexedDB(key);
+      return { pendingFiles: newFiles, uploadProgress: newProgress, uploadErrors: newErrors };
     }),
 
-  flushPendingUploads: async (studentId: string) => {
-    const { pendingFiles } = useStudentFormStore.getState();
-    const entries = Object.entries(pendingFiles);
-    if (entries.length === 0) return;
+  loadPendingFilesFromIndexedDB: async () => {
+    await runIndexedDBTTL();
+    const files = await loadFilesFromIndexedDB();
+    const progresses: Record<string, number> = {};
+    const errors: Record<string, string> = {};
+    Object.keys(files).forEach((k) => {
+      progresses[k] = 0;
+      errors[k] = '';
+    });
+    set(() => ({ pendingFiles: files, uploadProgress: progresses, uploadErrors: errors }));
+  },
 
-    for (const [docKey, file] of entries) {
+  flushPendingUploads: async (studentId: string, singleKey?: string) => {
+    const { pendingFiles } = useStudentFormStore.getState();
+    const keysToUpload = singleKey ? [singleKey] : Object.keys(pendingFiles);
+    
+    if (keysToUpload.length === 0) {
+      return { success: true, failedCount: 0 };
+    }
+
+    let failedCount = 0;
+
+    for (const key of keysToUpload) {
+      const file = pendingFiles[key];
+      if (!file) continue;
+
+      set((state) => ({
+        uploadErrors: { ...state.uploadErrors, [key]: '' },
+        uploadProgress: { ...state.uploadProgress, [key]: 0 },
+      }));
+
       try {
-        await uploadDocument(file, studentId, docKey);
-      } catch {
-        // Silent fail — file stays in local state
+        await uploadDocument(file, studentId, key, (progressEvent) => {
+          const percentCompleted = Math.round((progressEvent.loaded * 100) / progressEvent.total);
+          set((state) => ({
+            uploadProgress: { ...state.uploadProgress, [key]: percentCompleted },
+          }));
+        });
+
+        // Delete successful upload from state and IndexedDB
+        set((state) => {
+          const newFiles = { ...state.pendingFiles };
+          delete newFiles[key];
+          const newProgress = { ...state.uploadProgress };
+          delete newProgress[key];
+          const newErrors = { ...state.uploadErrors };
+          delete newErrors[key];
+          return { pendingFiles: newFiles, uploadProgress: newProgress, uploadErrors: newErrors };
+        });
+        await deleteFileFromIndexedDB(key);
+      } catch (err: any) {
+        failedCount++;
+        const friendlyMsg = getFriendlyErrorMessage(err);
+        set((state) => ({
+          uploadErrors: { ...state.uploadErrors, [key]: friendlyMsg },
+          uploadProgress: { ...state.uploadProgress, [key]: 0 },
+        }));
       }
     }
+
+    return {
+      success: failedCount === 0,
+      failedCount,
+    };
   },
 
   loadStudent: (student) => {
@@ -282,12 +466,16 @@ export const useStudentFormStore = create<StudentFormStore>((set) => ({
     });
   },
 
-  clearForm: () =>
+  clearForm: () => {
     set({
       ...initialFields,
       docsUploaded: { ...initialDocsUploaded },
       pendingFiles: {},
+      uploadProgress: {},
+      uploadErrors: {},
       activeTab: 'biodata',
       loadedStudentId: null,
-    }),
+    });
+    clearAllIndexedDB();
+  },
 }));

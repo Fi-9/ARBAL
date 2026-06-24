@@ -35,6 +35,20 @@ export class UsersController {
     return this.usersService.findAll();
   }
 
+  @Get('permissions')
+  @Permissions('user.manage')
+  @ApiOperation({ summary: 'Get current role permissions' })
+  async getPermissions() {
+    return this.usersService.getPermissions();
+  }
+
+  @Post('permissions')
+  @Permissions('user.manage')
+  @ApiOperation({ summary: 'Update role permissions' })
+  async savePermissions(@Body() body: Record<string, string[]>, @Req() req: AuthedRequest) {
+    return this.usersService.savePermissions(body, req.user.id);
+  }
+
   @Get(':id')
   @Permissions('user.manage')
   @ApiOperation({ summary: 'Get a single user by ID' })

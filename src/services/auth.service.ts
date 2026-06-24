@@ -21,6 +21,7 @@ export interface LoginResponse {
     name: string;
     email: string;
     role: string;
+    permissions: string[];
   };
 }
 
@@ -29,6 +30,7 @@ export interface UserProfile {
   name: string;
   email: string;
   role: string;
+  permissions: string[];
 }
 
 // ---------------------------------------------------------------------------

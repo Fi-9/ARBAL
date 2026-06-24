@@ -88,7 +88,7 @@ export interface Student {
   completenessPercent?: number;
 }
 
-export type RoleType = 'Super Admin' | 'Guru / Wali Kelas';
+export type RoleType = 'Super Admin' | 'Guru / Wali Kelas' | 'Kepala Sekolah' | 'Tata Usaha';
 
 export interface AppRole {
   name: RoleType;
@@ -131,5 +131,5 @@ export interface UserAccount {
   isActive: boolean;
   createdAt: string;
   updatedAt: string;
-  role: 'SUPER_ADMIN' | 'GURU';
+  role: 'SUPER_ADMIN' | 'GURU' | 'KEPALA_SEKOLAH' | 'TATA_USAHA';
 }

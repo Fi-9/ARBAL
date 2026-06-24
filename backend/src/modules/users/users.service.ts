@@ -228,4 +228,72 @@ export class UsersService {
 
     return { message: `User "${existing.name}" has been deleted` };
   }
+
+  async getPermissions() {
+    const defaultPermissions = {
+      SUPER_ADMIN: [
+        'student.read', 'student.write', 'student.delete',
+        'document.read', 'document.upload', 'document.delete', 'document.verify',
+        'role.manage', 'user.manage',
+        'logs.view', 'dashboard.view', 'report.export', 'document.download',
+        'backup.manage',
+      ],
+      GURU: [
+        'student.read',
+        'document.read',
+        'document.download',
+        'dashboard.view',
+      ],
+      KEPALA_SEKOLAH: [
+        'student.read',
+        'document.read',
+        'document.download',
+        'dashboard.view',
+        'logs.view',
+      ],
+      TATA_USAHA: [
+        'student.read', 'student.write', 'student.delete',
+        'document.read', 'document.upload', 'document.delete', 'document.verify',
+        'dashboard.view', 'document.download',
+      ],
+    };
+    const setting = await this.prisma.systemSetting.findUnique({
+      where: { key: 'ROLE_PERMISSIONS' },
+    });
+    if (!setting) {
+      return defaultPermissions;
+    }
+    try {
+      const parsed = JSON.parse(setting.value);
+      return {
+        ...defaultPermissions,
+        ...parsed,
+      };
+    } catch {
+      return defaultPermissions;
+    }
+  }
+
+  async savePermissions(permissions: Record<string, string[]>, actorId: string) {
+    const value = JSON.stringify(permissions);
+    const updated = await this.prisma.systemSetting.upsert({
+      where: { key: 'ROLE_PERMISSIONS' },
+      update: { value },
+      create: { key: 'ROLE_PERMISSIONS', value },
+    });
+
+    await this.prisma.activityLog.create({
+      data: {
+        id: `LOG_${randomUUID()}`,
+        actorUserId: actorId,
+        action: 'UPDATE_PERMISSIONS',
+        category: 'HAK_AKSES',
+        entityType: 'SystemSetting',
+        entityId: updated.id,
+        details: `Updated role permissions: ${value}`,
+      },
+    });
+
+    return { success: true };
+  }
 }

@@ -11,12 +11,15 @@ import {
   AlertCircle,
   ChevronDown,
   ChevronRight,
-  ArrowLeftRight
+  ArrowLeftRight,
+  RefreshCw
 } from 'lucide-react';
 import { ActivityLog } from '../types';
 
 interface ActivityLogViewProps {
   logs: ActivityLog[];
+  onRefresh?: () => void;
+  isRefreshing?: boolean;
 }
 
 /** Parse before/after JSON from log details if present.
@@ -121,6 +124,8 @@ function DiffRow({ field, before, after }: { field: string; before: any; after: 
 
 export default function ActivityLogView({
   logs,
+  onRefresh,
+  isRefreshing,
 }: ActivityLogViewProps) {
 
   // Search & Filters state
@@ -183,11 +188,24 @@ export default function ActivityLogView({
           </div>
 
           <div className="flex items-center space-x-2 shrink-0">
+            {/* Refresh log button */}
+            {onRefresh && (
+              <button
+                onClick={onRefresh}
+                disabled={isRefreshing}
+                className="flex items-center space-x-2 bg-slate-100 hover:bg-slate-200 disabled:opacity-50 text-slate-700 font-bold text-xs px-4 py-2.5 rounded-lg transition border border-slate-200 cursor-pointer"
+                title="Refresh log aktivitas"
+              >
+                <RefreshCw size={14} className={isRefreshing ? 'animate-spin' : ''} />
+                <span>Refresh Log</span>
+              </button>
+            )}
+
             {/* Export audit log as local CSV */}
             <button
               onClick={handleExportCSV}
               disabled={filteredLogs.length === 0}
-              className="flex items-center space-x-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white font-bold text-xs px-4 py-2.5 rounded-lg transition shadow-md hover:shadow-emerald-600/10"
+              className="flex items-center space-x-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white font-bold text-xs px-4 py-2.5 rounded-lg transition shadow-md hover:shadow-emerald-600/10 cursor-pointer"
               title="Ekspor log aktivitas yang ditampilkan sebagai file CSV"
             >
               <DownloadCloud size={14} />
@@ -282,7 +300,7 @@ export default function ActivityLogView({
                             log.action
                           )}
                         </td>
-                        <td className="p-4 text-slate-600 leading-relaxed max-w-sm">
+                        <td className="p-4 text-slate-600 leading-relaxed max-w-sm break-all">
                           {auditDiff
                             ? log.details.replace(/\.?\s*Changes:\s*\{.*\}$/s, '').trim() || log.action
                             : log.details}

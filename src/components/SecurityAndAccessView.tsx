@@ -1,14 +1,15 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   ShieldCheck,
-  Check,
-  X,
   Info,
   KeyRound,
   UserRound,
+  RefreshCw,
 } from 'lucide-react';
 import { RoleType } from '../types';
 import { useAuthStore } from '../stores/auth.store';
+import { userService } from '../services/user.service';
+import { useToastStore } from '../stores/toast.store';
 import UserManagementPanel from './UserManagementPanel';
 
 interface SecurityAndAccessViewProps {
@@ -16,52 +17,90 @@ interface SecurityAndAccessViewProps {
   onAddNotification: (title: string, message: string, type: 'info' | 'success' | 'warning') => void;
 }
 
-const ROLE_PERMISSION_MATRIX: Array<{
-  label: string;
-  values: Record<RoleType, boolean>;
-}> = [
-  {
-    label: 'Lihat biodata siswa',
-    values: { 'Super Admin': true, 'Guru / Wali Kelas': true },
-  },
-  {
-    label: 'Registrasi dan edit siswa',
-    values: { 'Super Admin': true, 'Guru / Wali Kelas': false },
-  },
-  {
-    label: 'Hapus data siswa',
-    values: { 'Super Admin': true, 'Guru / Wali Kelas': false },
-  },
-  {
-    label: 'Unggah dokumen',
-    values: { 'Super Admin': true, 'Guru / Wali Kelas': false },
-  },
-  {
-    label: 'Hapus dokumen',
-    values: { 'Super Admin': true, 'Guru / Wali Kelas': false },
-  },
-  {
-    label: 'Verifikasi dokumen',
-    values: { 'Super Admin': true, 'Guru / Wali Kelas': false },
-  },
-  {
-    label: 'Kelola akun dan peran',
-    values: { 'Super Admin': true, 'Guru / Wali Kelas': false },
-  },
-  {
-    label: 'Lihat audit log penuh',
-    values: { 'Super Admin': true, 'Guru / Wali Kelas': false },
-  },
+const ROLE_PERMISSION_MATRIX = [
+  { label: 'Lihat biodata siswa' },
+  { label: 'Registrasi dan edit siswa' },
+  { label: 'Hapus data siswa' },
+  { label: 'Unggah dokumen' },
+  { label: 'Hapus dokumen' },
+  { label: 'Verifikasi dokumen' },
+  { label: 'Kelola akun dan peran' },
+  { label: 'Lihat audit log penuh' },
 ];
 
-
-
+const PERMISSION_ROW_KEYS: Record<string, string[]> = {
+  'Lihat biodata siswa': ['student.read'],
+  'Registrasi dan edit siswa': ['student.write'],
+  'Hapus data siswa': ['student.delete'],
+  'Unggah dokumen': ['document.upload'],
+  'Hapus dokumen': ['document.delete'],
+  'Verifikasi dokumen': ['document.verify'],
+  'Kelola akun dan peran': ['user.manage', 'role.manage'],
+  'Lihat audit log penuh': ['logs.view'],
+};
 
 export default function SecurityAndAccessView({
   selectedRole,
+  onAddNotification,
 }: SecurityAndAccessViewProps) {
   const { user } = useAuthStore();
+  const addToast = useToastStore((state) => state.addToast);
   const canManageUsers = selectedRole === 'Super Admin';
+
+  const [permissions, setPermissions] = useState<Record<string, string[]>>({
+    SUPER_ADMIN: [],
+    GURU: [],
+    KEPALA_SEKOLAH: [],
+    TATA_USAHA: [],
+  });
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    userService.getPermissions()
+      .then((data) => {
+        setPermissions(data);
+        setLoading(false);
+      })
+      .catch((err) => {
+        addToast('Gagal memuat matriks izin dari server.', 'error');
+        setLoading(false);
+      });
+  }, []);
+
+  const handleTogglePermission = (role: string, keys: string[], currentChecked: boolean) => {
+    setPermissions((prev) => {
+      const currentList = prev[role] || [];
+      let newList: string[];
+      if (currentChecked) {
+        newList = currentList.filter((k) => !keys.includes(k));
+      } else {
+        newList = [...currentList, ...keys.filter((k) => !currentList.includes(k))];
+      }
+      return {
+        ...prev,
+        [role]: newList,
+      };
+    });
+  };
+
+  const handleSavePermissions = async () => {
+    setSaving(true);
+    try {
+      await userService.savePermissions(permissions);
+      useAuthStore.getState().setRolePermissionsMap(permissions);
+      addToast('Perubahan hak akses berhasil disimpan ke database!', 'success');
+      onAddNotification(
+        'Hak Akses Diperbarui',
+        'Kebijakan hak akses peran telah diperbarui di database backend.',
+        'success'
+      );
+    } catch (err: any) {
+      addToast(`Gagal menyimpan izin: ${err.message || 'Error'}`, 'error');
+    } finally {
+      setSaving(false);
+    }
+  };
 
   return (
     <div id="security-access-view" className="space-y-6">
@@ -92,11 +131,14 @@ export default function SecurityAndAccessView({
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm lg:col-span-2 space-y-4">
-          <div>
-            <h4 className="font-bold text-slate-800 text-sm uppercase tracking-wide">Matriks izin aplikasi</h4>
-            <p className="text-xs text-slate-500">
-              Diselaraskan dengan permission map backend, supaya tampilan akses tidak lagi bergantung pada akun contoh.
-            </p>
+          <div className="flex items-center justify-between">
+            <div>
+              <h4 className="font-bold text-slate-800 text-sm uppercase tracking-wide">Matriks izin aplikasi</h4>
+              <p className="text-xs text-slate-500">
+                Diselaraskan dengan permission map backend. Centang izin untuk mengubah akses secara real-time.
+              </p>
+            </div>
+            {loading && <RefreshCw className="animate-spin text-slate-400" size={16} />}
           </div>
 
           <div className="overflow-x-auto border border-slate-100 rounded-xl">
@@ -106,32 +148,59 @@ export default function SecurityAndAccessView({
                   <th className="p-3">Operasi</th>
                   <th className="p-3 text-center">Super Admin</th>
                   <th className="p-3 text-center">Guru</th>
+                  <th className="p-3 text-center">Kepala Sekolah</th>
+                  <th className="p-3 text-center">Tata Usaha</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 font-medium">
-                {ROLE_PERMISSION_MATRIX.map((row) => (
-                  <tr key={row.label}>
-                    <td className="p-3 text-slate-700">{row.label}</td>
-                    {(['Super Admin', 'Guru / Wali Kelas'] as RoleType[]).map((role) => (
-                      <td
-                        key={role}
-                        className={`p-3 text-center ${row.values[role] ? 'text-emerald-600' : 'text-rose-500'}`}
-                      >
-                        {row.values[role] ? <Check className="mx-auto" size={16} /> : <X className="mx-auto" size={16} />}
-                      </td>
-                    ))}
-                  </tr>
-                ))}
+                {ROLE_PERMISSION_MATRIX.map((row) => {
+                  const keys = PERMISSION_ROW_KEYS[row.label] || [];
+                  return (
+                    <tr key={row.label} className="hover:bg-slate-50/30 transition">
+                      <td className="p-3 text-slate-700 font-semibold">{row.label}</td>
+                      {(['Super Admin', 'Guru / Wali Kelas', 'Kepala Sekolah', 'Tata Usaha'] as RoleType[]).map((role) => {
+                        const backendRole = role === 'Super Admin' ? 'SUPER_ADMIN' :
+                                            role === 'Guru / Wali Kelas' ? 'GURU' :
+                                            role === 'Kepala Sekolah' ? 'KEPALA_SEKOLAH' : 'TATA_USAHA';
+                        const isChecked = keys.every((k) => permissions[backendRole]?.includes(k));
+                        return (
+                          <td key={role} className="p-3 text-center">
+                            <input
+                              type="checkbox"
+                              checked={isChecked}
+                              disabled={backendRole === 'SUPER_ADMIN' || !canManageUsers || loading || saving}
+                              onChange={() => handleTogglePermission(backendRole, keys, isChecked)}
+                              className="h-4 w-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500 cursor-pointer disabled:opacity-50"
+                            />
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
 
+          {canManageUsers && (
+            <div className="flex justify-end pt-2">
+              <button
+                type="button"
+                onClick={handleSavePermissions}
+                disabled={saving || loading}
+                className="bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white font-bold py-2.5 px-6 rounded-lg transition text-xs shadow-md flex items-center gap-1.5 cursor-pointer hover:shadow-emerald-600/10"
+              >
+                {saving ? 'Menyimpan...' : 'Simpan Perubahan Izin'}
+              </button>
+            </div>
+          )}
+
           <div className="p-3 bg-blue-50 text-blue-900 border border-blue-100 rounded-lg flex items-start space-x-2 text-[11px] leading-relaxed">
             <Info size={14} className="shrink-0 mt-0.5 text-blue-500" />
             <div>
-              <p className="font-bold">Catatan audit</p>
+              <p className="font-bold">Informasi Kebijakan Akses</p>
               <p className="text-slate-600">
-                Beberapa kontrol sebelumnya hanya simulasi frontend. Matriks ini sekarang diposisikan sebagai dokumentasi izin, sedangkan sumber kebenaran tetap ada di backend guard JWT.
+                Pembaruan izin ini disimpan langsung ke basis data backend. Setelah disimpan, akun dengan peran terkait akan langsung mendapatkan penyesuaian izin akses menu secara real-time pada pemanggilan API berikutnya.
               </p>
             </div>
           </div>

@@ -35,6 +35,7 @@ import {
 } from 'lucide-react';
 import { Student, ActivityLog, RoleType } from '../types';
 import { useUIStore } from '../stores/ui.store';
+import { useAuthStore } from '../stores/auth.store';
 
 interface DashboardViewProps {
   students: Student[];
@@ -50,12 +51,17 @@ export default function DashboardView({
   onViewChange,
 }: DashboardViewProps) {
   const setInitialDirectoryFilter = useUIStore((state) => state.setInitialDirectoryFilter);
+  const permissions = useAuthStore((state) => state.permissions);
+  const user = useAuthStore((state) => state.user);
 
   // Statistics
   const totalStudents = students.length;
   const activeStudents = students.filter(s => s.status === 'Aktif').length;
   const alumniStudents = students.filter(s => s.status === 'Alumni').length;
-  const otherStudents = totalStudents - activeStudents - alumniStudents;
+  const pendaftarStudents = students.filter(s => s.status === 'Pendaftar').length;
+  const cutiStudents = students.filter(s => s.status === 'Cuti').length;
+  const lulusStudents = students.filter(s => s.status === 'Lulus').length;
+  const keluarStudents = students.filter(s => s.status === 'Keluar').length;
 
   // Documents
   let totalDocs = 0;
@@ -88,11 +94,14 @@ export default function DashboardView({
     Siswa: classesMap[className]
   }));
 
-  // Chart Data 2: Student status
+  // Chart Data 2: Student status with distinct colors
   const statusChartData = [
     { name: 'Aktif', value: activeStudents, color: '#10b981' },
     { name: 'Alumni', value: alumniStudents, color: '#3b82f6' },
-    { name: 'Pindahan/Lain', value: otherStudents, color: '#f59e0b' }
+    { name: 'Pendaftar', value: pendaftarStudents, color: '#8b5cf6' },
+    { name: 'Cuti', value: cutiStudents, color: '#f59e0b' },
+    { name: 'Lulus', value: lulusStudents, color: '#06b6d4' },
+    { name: 'Keluar', value: keluarStudents, color: '#ef4444' }
   ].filter(status => status.value > 0);
 
   // Chart Data 3: Kelengkapan Dokumen Arsip (Ijazah Terakhir, KK, Akta, Foto, Rapor, SKL)
@@ -136,27 +145,29 @@ export default function DashboardView({
         
         {/* Quick action buttons — role-aware */}
         <div className="flex flex-wrap items-center gap-2.5">
-          {selectedRole === 'Super Admin' ? (
-            <>
-              <button
-                id="btn-quick-add-student"
-                onClick={() => onViewChange('inputForm')}
-                className="flex items-center space-x-2 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs px-4 py-2.5 rounded-lg shadow-md hover:shadow-emerald-600/10 transition"
-              >
-                <Users size={14} className="text-emerald-100" />
-                <span>Tambah Siswa</span>
-              </button>
+          {permissions.includes('student.write') && (
+            <button
+              id="btn-quick-add-student"
+              onClick={() => onViewChange('inputForm')}
+              className="flex items-center space-x-2 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs px-4 py-2.5 rounded-lg shadow-md hover:shadow-emerald-600/10 transition"
+            >
+              <Users size={14} className="text-emerald-100" />
+              <span>Tambah Siswa</span>
+            </button>
+          )}
 
-              <button
-                id="btn-quick-upload-doc"
-                onClick={() => onViewChange('directory')}
-                className="flex items-center space-x-2 bg-slate-700 hover:bg-slate-600 text-slate-200 font-medium text-xs px-3.5 py-2.5 rounded-lg border border-slate-600 transition"
-              >
-                <UploadCloud size={14} className="text-slate-300" />
-                <span>Upload Dokumen</span>
-              </button>
-            </>
-          ) : (
+          {permissions.includes('document.upload') && (
+            <button
+              id="btn-quick-upload-doc"
+              onClick={() => onViewChange('directory')}
+              className="flex items-center space-x-2 bg-slate-700 hover:bg-slate-600 text-slate-200 font-medium text-xs px-3.5 py-2.5 rounded-lg border border-slate-600 transition"
+            >
+              <UploadCloud size={14} className="text-slate-300" />
+              <span>Upload Dokumen</span>
+            </button>
+          )}
+
+          {!permissions.includes('student.write') && !permissions.includes('document.upload') && (
             <button
               id="btn-goto-directory-guru"
               onClick={() => onViewChange('directory')}
@@ -390,18 +401,18 @@ export default function DashboardView({
                 </p>
               </div>
 
-              {selectedRole === 'Super Admin' && (
+              {user?.role === 'SUPER_ADMIN' && (
                 <div className="p-3 bg-indigo-50/60 text-indigo-950 rounded-lg border border-indigo-100">
-                  <p className="font-bold mb-1">🛡️ Simulasi Akses Guru</p>
+                  <p className="font-bold mb-1">🛡️ Simulasi Multi-Peran (RBAC)</p>
                   <p className="leading-relaxed text-slate-600 font-normal">
-                    Gunakan dropdown peran di bagian atas layar untuk mensimulasikan login Guru dan memeriksa pembatasan data PII dan aksi edit/delete.
+                    Gunakan dropdown <strong>Simulasi Peran</strong> di bagian atas untuk berganti peran secara instan (Guru, Kepsek, Tata Usaha) dan meninjau pembatasan menu serta izin akses API.
                   </p>
                 </div>
               )}
             </div>
           </div>
 
-          {selectedRole === 'Super Admin' && (
+          {permissions.includes('student.write') && (
             <div className="pt-4 border-t border-slate-100">
               <button
                 id="btn-dashboard-add-student"

@@ -14,6 +14,7 @@
 
 import axios, { AxiosError, InternalAxiosRequestConfig } from 'axios';
 import { useAuthStore } from '../stores/auth.store';
+import { useUIStore } from '../stores/ui.store';
 
 // ---------------------------------------------------------------------------
 // Client instance
@@ -94,6 +95,7 @@ api.interceptors.response.use(
         // Refresh failed — reject all queued requests and clear session
         rejectQueue(refreshError);
         useAuthStore.getState().clearSession();
+        useUIStore.getState().reset(); // Clear old UI state on auto-logout
         return Promise.reject(refreshError);
       } finally {
         _isRefreshing = false;

@@ -37,4 +37,13 @@ export const userService = {
   remove: async (id: string): Promise<void> => {
     await api.delete(`/users/${id}`);
   },
+
+  getPermissions: async (): Promise<Record<string, string[]>> => {
+    const { data } = await api.get<Record<string, string[]>>('/users/permissions');
+    return data;
+  },
+
+  savePermissions: async (permissions: Record<string, string[]>): Promise<void> => {
+    await api.post('/users/permissions', permissions);
+  },
 };

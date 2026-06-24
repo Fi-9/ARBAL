@@ -18,12 +18,55 @@ function hashToken(raw: string): string {
   return createHash('sha256').update(raw).digest('hex');
 }
 
+const ROLE_PERMISSIONS: Record<string, string[]> = {
+  SUPER_ADMIN: [
+    'student.read', 'student.write', 'student.delete',
+    'document.read', 'document.upload', 'document.delete', 'document.verify',
+    'role.manage', 'user.manage',
+    'logs.view', 'dashboard.view', 'report.export', 'document.download',
+    'backup.manage',
+  ],
+  GURU: [
+    'student.read',
+    'document.read',
+    'document.download',
+    'dashboard.view',
+  ],
+  KEPALA_SEKOLAH: [
+    'student.read',
+    'document.read',
+    'document.download',
+    'dashboard.view',
+    'logs.view',
+  ],
+  TATA_USAHA: [
+    'student.read', 'student.write', 'student.delete',
+    'document.read', 'document.upload', 'document.delete', 'document.verify',
+    'dashboard.view', 'document.download',
+  ],
+};
+
 @Injectable()
 export class AuthService {
   constructor(
     private prisma: PrismaService,
     private jwtService: JwtService,
   ) {}
+
+  async getPermissionsForRole(roleName: string): Promise<string[]> {
+    try {
+      const setting = await this.prisma.systemSetting.findUnique({
+        where: { key: 'ROLE_PERMISSIONS' },
+      });
+      if (setting) {
+        const mapping = JSON.parse(setting.value);
+        return mapping[roleName] ?? ROLE_PERMISSIONS[roleName] ?? [];
+      }
+    } catch (err: any) {
+      console.error('Failed to load dynamic permissions in auth service:', err.message);
+    }
+    return ROLE_PERMISSIONS[roleName] ?? [];
+  }
 
   /**
    * Signs an ACCESS token (15 min) containing identity + role claims.
@@ -169,6 +212,8 @@ export class AuthService {
       },
     });
 
+    const permissions = await this.getPermissionsForRole(user.Role.name);
+
     return {
       accessToken,
       refreshToken,
@@ -177,6 +222,7 @@ export class AuthService {
         name: user.name,
         email: user.email,
         role: user.Role.name,
+        permissions,
       },
     };
   }
@@ -258,6 +304,8 @@ export class AuthService {
       },
     });
 
+    const permissions = await this.getPermissionsForRole(user.Role.name);
+
     return {
       accessToken,
       refreshToken: newRefreshToken,
@@ -266,6 +314,7 @@ export class AuthService {
         name: user.name,
         email: user.email,
         role: user.Role.name,
+        permissions,
       },
     };
   }

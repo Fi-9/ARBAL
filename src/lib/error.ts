@@ -51,6 +51,9 @@ export function getFriendlyErrorMessage(error: any): string {
     if (status === 429) {
       return 'Terlalu banyak permintaan ke server. Silakan tunggu beberapa saat.';
     }
+    if (status === 413) {
+      return 'Ukuran file terlalu besar. Batas maksimal unggahan adalah 10MB.';
+    }
     if (status >= 500) {
       return 'Terjadi kesalahan internal pada server. Silakan coba lagi nanti.';
     }

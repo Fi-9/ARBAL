@@ -39,6 +39,7 @@ import {
 import { Student, DocumentItem, DocumentType, StudentStatus, RoleType } from '../types';
 import { useToastStore } from '../stores/toast.store';
 import { useUIStore } from '../stores/ui.store';
+import { useAuthStore } from '../stores/auth.store';
 import { documentService, getDocumentFileUrl, normalizeStatus } from '../services/document.service';
 import { api } from '../lib/api';
 
@@ -202,12 +203,14 @@ export default function StudentDirectoryView({
     };
   }, [previewDoc?.id]);
 
-  // Permissions helper — Guru: read + download only
-  const isAdmin = selectedRole === 'Super Admin';
-  const canDelete = isAdmin;
-  const canWrite = isAdmin;
-  const canVerify = isAdmin;
-  const canUpload = isAdmin;
+  // Permissions helper — dynamic from useAuthStore
+  const permissions = useAuthStore((state) => state.permissions);
+  const canDelete = permissions.includes('student.delete');
+  const canWrite = permissions.includes('student.write');
+  const canVerify = permissions.includes('document.verify');
+  const canUpload = permissions.includes('document.upload');
+  const canExport = permissions.includes('report.export');
+  const canDeleteDoc = permissions.includes('document.delete');
 
   // Get distinct classes for filters
   const classes = ['Semua', ...Array.from(new Set(students.map(s => s.kelas)))];
@@ -409,7 +412,7 @@ export default function StudentDirectoryView({
 
   // Delete document action
   const handleDeleteDocument = async (studentId: string, docId: string, docName: string) => {
-    if (!selectedRole) {
+    if (!canDeleteDoc) {
       addToast('Anda tidak diizinkan menghapus dokumen arsip.', 'warning');
       return;
     }
@@ -524,7 +527,7 @@ export default function StudentDirectoryView({
           </div>
 
           <div className="flex items-center gap-2 flex-wrap">
-            {isAdmin && (
+            {canExport && (
               <>
                 <button
                   id="btn-export-excel"
@@ -592,10 +595,12 @@ export default function StudentDirectoryView({
               className="w-full bg-slate-50 text-slate-800 text-xs pl-9 pr-4 py-2.5 rounded-lg border border-slate-200 focus:outline-none focus:border-emerald-500 appearance-none transition-colors"
             >
               <option value="Semua">Semua Status</option>
+              <option value="Pendaftar">Status: Pendaftar</option>
               <option value="Aktif">Status: Aktif</option>
+              <option value="Cuti">Status: Cuti</option>
+              <option value="Lulus">Status: Lulus</option>
+              <option value="Keluar">Status: Keluar</option>
               <option value="Alumni">Status: Alumni</option>
-              <option value="Pindahan">Status: Pindahan</option>
-              <option value="Non-Aktif">Status: Non-Aktif</option>
             </select>
           </div>
 
@@ -679,7 +684,9 @@ export default function StudentDirectoryView({
                           student.status === 'Alumni' ? 'bg-blue-50 text-blue-700 border border-blue-100' :
                           student.status === 'Pendaftar' ? 'bg-purple-50 text-purple-700 border border-purple-100' :
                           student.status === 'Cuti' ? 'bg-amber-50 text-amber-700 border border-amber-100' :
-                          'bg-slate-100 text-slate-700'
+                          student.status === 'Lulus' ? 'bg-cyan-50 text-cyan-700 border border-cyan-100' :
+                          student.status === 'Keluar' ? 'bg-rose-50 text-rose-700 border border-rose-100' :
+                          'bg-slate-50 text-slate-700 border border-slate-100'
                         }`}>
                           ● {student.status}
                         </span>
@@ -829,7 +836,7 @@ export default function StudentDirectoryView({
                         <p className="text-[10px] text-slate-400 font-bold uppercase">Nama Ayah / Wali</p>
                         <p className="text-slate-800 font-bold mt-0.5">{activeStudent.namaAyah || 'Belum Diisi'}</p>
                         <p className="text-[10px] text-slate-400 mt-0.5">Pekerjaan: {activeStudent.pekerjaanAyah || 'Belum Diisi'}</p>
-                        {selectedRole !== 'Guru / Wali Kelas' && (
+                        {(permissions.includes('student.write') || permissions.includes('logs.view')) && (
                           <p className="text-[10px] text-slate-400 mt-0.5">No. KTP: {activeStudent.ktpAyah || '-'}</p>
                         )}
                         {activeStudent.teleponAyah && (
@@ -840,7 +847,7 @@ export default function StudentDirectoryView({
                         <p className="text-[10px] text-slate-400 font-bold uppercase">Nama Ibu / Wali</p>
                         <p className="text-slate-800 font-bold mt-0.5">{activeStudent.namaIbu || 'Belum Diisi'}</p>
                         <p className="text-[10px] text-slate-400 mt-0.5">Pekerjaan: {activeStudent.pekerjaanIbu || 'Belum Diisi'}</p>
-                        {selectedRole !== 'Guru / Wali Kelas' && (
+                        {(permissions.includes('student.write') || permissions.includes('logs.view')) && (
                           <p className="text-[10px] text-slate-400 mt-0.5">No. KTP: {activeStudent.ktpIbu || '-'}</p>
                         )}
                         {activeStudent.teleponIbu && (
@@ -954,13 +961,15 @@ export default function StudentDirectoryView({
                                   <Download size={13} />
                                 </button>
                                 
-                                <button
-                                  onClick={() => handleDeleteDocument(activeStudent.id, doc.id, doc.name)}
-                                  className="text-rose-500 hover:text-rose-700 hover:bg-rose-55 p-1 rounded font-bold transition"
-                                  title="Hapus Berkas"
-                                >
-                                  <Trash size={13} />
-                                </button>
+                                {canDeleteDoc && (
+                                  <button
+                                    onClick={() => handleDeleteDocument(activeStudent.id, doc.id, doc.name)}
+                                    className="text-rose-500 hover:text-rose-700 hover:bg-rose-50 p-1 rounded font-bold transition"
+                                    title="Hapus Berkas"
+                                  >
+                                    <Trash size={13} />
+                                  </button>
+                                )}
                               </div>
                             </div>
                           </div>
@@ -1063,8 +1072,8 @@ export default function StudentDirectoryView({
                     </div>
                   ) : timelineData.length === 0 ? (
                     <div className="text-center py-12 text-slate-400 text-xs space-y-1.5 border border-dashed border-slate-200 rounded-xl">
-                      <Calendar size={24} className="mx-auto text-slate-350" />
-                      <p className="font-bold text-slate-650">Linimasa Belum Tercatat</p>
+                      <Calendar size={24} className="mx-auto text-slate-400" />
+                      <p className="font-bold text-slate-700">Linimasa Belum Tercatat</p>
                       <p>Belum ada rekaman riwayat/mutasi untuk siswa ini.</p>
                     </div>
                   ) : (
@@ -1300,7 +1309,7 @@ export default function StudentDirectoryView({
                 )}
 
                 {/* Delete (Admin/TU only) */}
-                {activeStudent && (
+                {activeStudent && canDeleteDoc && (
                   <button 
                     onClick={() => { handleDeleteDocument(activeStudent.id, previewDoc.id, previewDoc.name); closePreview(); }}
                     className="flex-1 sm:flex-initial px-4 py-2 text-xs font-bold bg-rose-950/30 hover:bg-rose-900/50 text-rose-400 hover:text-rose-300 rounded-lg transition border border-rose-900/30 flex items-center justify-center gap-1.5"
@@ -1317,11 +1326,11 @@ export default function StudentDirectoryView({
 
       {/* 5. REJECTION NOTES MODAL */}
       {rejectingDoc && (
-        <div id="rejection-notes-modal" className="fixed inset-0 z-[100] bg-black/60 flex items-center justify-center p-4 animate-fade-in">
+        <div id="rejection-notes-modal" className="fixed inset-0 z-[100] bg-black/60 flex items-center justify-center p-4 UAT-modal animate-fade-in">
           <div className="bg-white rounded-xl w-full max-w-md overflow-hidden text-slate-800 border border-slate-200 shadow-2xl flex flex-col">
             <div className="bg-slate-50 p-4 border-b border-slate-200 flex items-center justify-between">
               <h3 className="font-bold text-slate-800 text-sm">Alasan Penolakan Dokumen</h3>
-              <button onClick={() => setRejectingDoc(null)} className="text-slate-400 hover:text-slate-650">
+              <button onClick={() => setRejectingDoc(null)} className="text-slate-400 hover:text-slate-700">
                 <X size={16} />
               </button>
             </div>
@@ -1340,14 +1349,14 @@ export default function StudentDirectoryView({
             <div className="bg-slate-50 p-3.5 border-t border-slate-200 flex justify-end gap-2 text-xs font-semibold">
               <button
                 onClick={() => setRejectingDoc(null)}
-                className="px-4 py-2 bg-slate-250 hover:bg-slate-300 text-slate-700 rounded-lg transition"
+                className="px-4 py-2 bg-slate-200 hover:bg-slate-300 text-slate-700 rounded-lg transition"
               >
                 Batal
               </button>
               <button
                 onClick={handleConfirmReject}
                 disabled={!rejectionNotes.trim()}
-                className="px-4 py-2 bg-rose-650 hover:bg-rose-600 disabled:opacity-50 text-white rounded-lg transition"
+                className="px-4 py-2 bg-rose-600 hover:bg-rose-700 disabled:opacity-50 text-white rounded-lg transition"
               >
                 Simpan Penolakan
               </button>

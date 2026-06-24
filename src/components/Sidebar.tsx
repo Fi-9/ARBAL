@@ -18,25 +18,23 @@ import { RoleType } from '../types';
 interface SidebarProps {
   currentView: import('../stores/ui.store').AppView;
   onViewChange: (view: import('../stores/ui.store').AppView) => void;
-  selectedRole: RoleType;
+  permissions: string[];
 }
 
 export default function Sidebar({
   currentView,
   onViewChange,
-  selectedRole,
+  permissions = [],
 }: SidebarProps) {
 
-  const isAdmin = selectedRole === 'Super Admin';
-
-  const menuItems: Array<{ id: import('../stores/ui.store').AppView; label: string; icon: React.ComponentType<any>; adminOnly?: boolean }> = [
-    { id: 'dashboard', label: 'Dasbor Utama', icon: LayoutDashboard },
-    { id: 'directory', label: 'Arsip Data Siswa', icon: Users },
-    { id: 'inputForm', label: 'Input Data Siswa', icon: UserPlus, adminOnly: true },
-    { id: 'trash', label: 'Sampah (Trash Bin)', icon: Trash2, adminOnly: true },
-    { id: 'accessControl', label: 'Manajemen Akses', icon: ShieldAlert, adminOnly: true },
-    { id: 'activityLog', label: 'Log Aktivitas', icon: History, adminOnly: true },
-    { id: 'backup', label: 'Pengaturan Backup', icon: Database, adminOnly: true },
+  const menuItems: Array<{ id: import('../stores/ui.store').AppView; label: string; icon: React.ComponentType<any>; requiredPermissions: string[] }> = [
+    { id: 'dashboard', label: 'Dasbor Utama', icon: LayoutDashboard, requiredPermissions: ['dashboard.view'] },
+    { id: 'directory', label: 'Arsip Data Siswa', icon: Users, requiredPermissions: ['student.read'] },
+    { id: 'inputForm', label: 'Input Data Siswa', icon: UserPlus, requiredPermissions: ['student.write'] },
+    { id: 'trash', label: 'Sampah (Trash Bin)', icon: Trash2, requiredPermissions: ['student.delete'] },
+    { id: 'accessControl', label: 'Manajemen Akses', icon: ShieldAlert, requiredPermissions: ['user.manage', 'role.manage'] },
+    { id: 'activityLog', label: 'Log Aktivitas', icon: History, requiredPermissions: ['logs.view'] },
+    { id: 'backup', label: 'Pengaturan Backup', icon: Database, requiredPermissions: ['backup.manage'] },
   ];
 
   return (
@@ -58,7 +56,7 @@ export default function Sidebar({
         <p className="px-3 text-[10px] font-semibold text-slate-400 tracking-wider uppercase mb-2">MENU UTAMA</p>
         {menuItems.map((item) => {
           const IconComponent = item.icon;
-          const allowed = !item.adminOnly || isAdmin;
+          const allowed = item.requiredPermissions.some((p) => permissions.includes(p));
           const active = currentView === item.id;
 
           if (!allowed) {

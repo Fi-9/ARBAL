@@ -29,6 +29,7 @@ interface UIState {
   navigateToEdit: (studentId: string) => void;
   navigateToDirectory: () => void;
   setInitialDirectoryFilter: (filter: UIState['initialDirectoryFilter']) => void;
+  reset: () => void;
 }
 
 export const useUIStore = create<UIState>((set) => ({
@@ -46,4 +47,5 @@ export const useUIStore = create<UIState>((set) => ({
     set({ editingStudentId: null, currentView: 'directory' }),
 
   setInitialDirectoryFilter: (filter) => set({ initialDirectoryFilter: filter }),
+  reset: () => set({ currentView: 'dashboard', editingStudentId: null, initialDirectoryFilter: null }),
 }));

@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { studentService } from '../services/student.service';
 import { useStudentFormStore, DocsUploadedState } from '../stores/studentForm.store';
 import { useToastStore } from '../stores/toast.store';
+import { useAuthStore } from '../stores/auth.store';
 import { getFriendlyErrorMessage } from '../lib/error';
 import { 
   ArrowLeft, 
@@ -10,7 +11,8 @@ import {
   Plus, 
   AlertCircle, 
   Trash2,
-  RefreshCw
+  RefreshCw,
+  Edit2
 } from 'lucide-react';
 import { Student, StudentStatus, RoleType } from '../types';
 
@@ -32,7 +34,8 @@ export default function StudentFormView({
   isSaving = false
 }: StudentFormViewProps) {
   const addToast = useToastStore((state) => state.addToast);
-  const isReadOnly = selectedRole === 'Guru / Wali Kelas';
+  const permissions = useAuthStore((state) => state.permissions);
+  const isReadOnly = !permissions.includes('student.write');
 
   // Read all states and actions from the Zustand store
   const {
@@ -87,6 +90,8 @@ export default function StudentFormView({
     loadedStudentId,
     docsUploaded,
     pendingFiles,
+    uploadProgress,
+    uploadErrors,
 
     setField,
     loadStudent,
@@ -200,7 +205,7 @@ export default function StudentFormView({
     if (!angkatan) errors.push('angkatan');
     if (!status) errors.push('status');
     if (!kelas) errors.push('kelas');
-    if (!jurusan.trim()) errors.push('jurusan');
+    if (!asalSekolah.trim()) errors.push('asalSekolah');
     
     if (tahunLulusSebelumnya !== '' && isNaN(Number(tahunLulusSebelumnya))) {
       errors.push('tahunLulusSebelumnya_number');
@@ -216,14 +221,18 @@ export default function StudentFormView({
     if (ktpAyah.trim() && !/^\d{16}$/.test(ktpAyah.trim())) errors.push('ktpAyah_length');
     if (ktpIbu.trim() && !/^\d{16}$/.test(ktpIbu.trim())) errors.push('ktpIbu_length');
 
-    if (anakKe !== undefined && anakKe !== '') {
+    if (anakKe === undefined || anakKe === '' || anakKe === null) {
+      errors.push('anakKe');
+    } else {
       const val = Number(anakKe);
       if (isNaN(val) || val < 1 || val > 20) {
         errors.push('anakKe_range');
       }
     }
 
-    if (jumlahSaudara !== undefined && jumlahSaudara !== '') {
+    if (jumlahSaudara === undefined || jumlahSaudara === '' || jumlahSaudara === null) {
+      errors.push('jumlahSaudara');
+    } else {
       const val = Number(jumlahSaudara);
       if (isNaN(val) || val < 0 || val > 20) {
         errors.push('jumlahSaudara_range');
@@ -262,18 +271,34 @@ export default function StudentFormView({
     setField('activeTab', targetStep);
   };
 
-  // Academic Years state
+  // Academic Years & Classes states
   const [academicYears, setAcademicYears] = useState<{ id: string; name: string; isActive: boolean }[]>([]);
-  const [showAddAyModal, setShowAddAyModal] = useState(false);
+  const [classes, setClasses] = useState<{ id: string; name: string; isActive: boolean; description?: string }[]>([]);
+  const [showManageAyModal, setShowManageAyModal] = useState(false);
+  const [showManageClassesModal, setShowManageClassesModal] = useState(false);
+  
   const [newAyName, setNewAyName] = useState('');
   const [isAddingAy, setIsAddingAy] = useState(false);
+  const [newClassName, setNewClassName] = useState('');
+  const [newClassDesc, setNewClassDesc] = useState('');
+  const [isSavingClass, setIsSavingClass] = useState(false);
+  const [editingClassId, setEditingClassId] = useState<string | null>(null);
+  const [editingClassName, setEditingClassName] = useState('');
+  const [editingClassDesc, setEditingClassDesc] = useState('');
+
   const [showClearConfirm, setShowClearConfirm] = useState(false);
 
-  // Fetch Academic Years list on mount
+  const loadPendingFilesFromIndexedDB = useStudentFormStore((state) => state.loadPendingFilesFromIndexedDB);
+
+  // Fetch initial data on mount
   useEffect(() => {
     studentService.getAcademicYears().then(years => {
       setAcademicYears(years);
     });
+    studentService.getClasses().then(cls => {
+      setClasses(cls);
+    });
+    loadPendingFilesFromIndexedDB();
   }, []);
 
   // Auto-derive angkatan when academicYearId is selected
@@ -321,7 +346,7 @@ export default function StudentFormView({
       const updatedList = [created, ...academicYears].sort((a, b) => b.name.localeCompare(a.name));
       setAcademicYears(updatedList);
       setField('academicYearId', created.id);
-      setShowAddAyModal(false);
+      setShowManageAyModal(false);
       setNewAyName('');
 
       onAddNotification(
@@ -454,7 +479,7 @@ export default function StudentFormView({
           {/* Step 1 */}
           <button
             type="button"
-            onClick={() => handleGoToStep('biodata')}
+            onClick={(e) => { e.preventDefault(); handleGoToStep('biodata'); }}
             className="flex items-center space-x-2 text-left focus:outline-none"
             disabled={isSaving}
           >
@@ -476,7 +501,7 @@ export default function StudentFormView({
           {/* Step 2 */}
           <button
             type="button"
-            onClick={() => handleGoToStep('akademik')}
+            onClick={(e) => { e.preventDefault(); handleGoToStep('akademik'); }}
             className="flex items-center space-x-2 text-left focus:outline-none"
             disabled={isSaving}
           >
@@ -498,7 +523,7 @@ export default function StudentFormView({
           {/* Step 3 */}
           <button
             type="button"
-            onClick={() => handleGoToStep('keluarga')}
+            onClick={(e) => { e.preventDefault(); handleGoToStep('keluarga'); }}
             className="flex items-center space-x-2 text-left focus:outline-none"
             disabled={isSaving}
           >
@@ -520,7 +545,7 @@ export default function StudentFormView({
           {/* Step 4 */}
           <button
             type="button"
-            onClick={() => handleGoToStep('dokumen')}
+            onClick={(e) => { e.preventDefault(); handleGoToStep('dokumen'); }}
             className="flex items-center space-x-2 text-left focus:outline-none"
             disabled={isSaving}
           >
@@ -542,7 +567,7 @@ export default function StudentFormView({
           {/* Step 5 */}
           <button
             type="button"
-            onClick={() => handleGoToStep('review')}
+            onClick={(e) => { e.preventDefault(); handleGoToStep('review'); }}
             className="flex items-center space-x-2 text-left focus:outline-none"
             disabled={isSaving}
           >
@@ -563,7 +588,18 @@ export default function StudentFormView({
 
       {/* FORM CONTENT CONTAINER */}
       <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
-        <form onSubmit={handleSubmit} className="p-6 space-y-6 text-xs">
+        <form 
+          onSubmit={handleSubmit} 
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && activeTab !== 'review') {
+              const target = e.target as HTMLElement;
+              if (target.tagName.toLowerCase() !== 'textarea') {
+                e.preventDefault();
+              }
+            }
+          }}
+          className="p-6 space-y-6 text-xs"
+        >
           
           {/* STEP 1: BIODATA SISWA */}
           {activeTab === 'biodata' && (
@@ -812,20 +848,7 @@ export default function StudentFormView({
                 </div>
               </div>
 
-              {/* Navigation Controls */}
-              <div className="pt-4 border-t border-slate-100 flex justify-between items-center">
-                <div className="text-[10px] text-slate-400">
-                  Semua kolom bertanda <span className="text-rose-500 font-bold">*</span> wajib diisi.
-                </div>
-                <button
-                  type="button"
-                  onClick={() => handleGoToStep('akademik')}
-                  className="bg-slate-900 hover:bg-slate-800 text-white font-bold py-2 px-4 rounded-lg tracking-wide transition cursor-pointer"
-                  disabled={isSaving}
-                >
-                  Lanjut ke Data Akademik →
-                </button>
-              </div>
+
             </div>
           )}
 
@@ -866,9 +889,9 @@ export default function StudentFormView({
                     {!isReadOnly && (
                       <button
                         type="button"
-                        onClick={() => setShowAddAyModal(true)}
+                        onClick={() => setShowManageAyModal(true)}
                         className="bg-emerald-600 hover:bg-emerald-500 text-white font-bold p-2.5 rounded-lg transition shrink-0 shadow-sm cursor-pointer"
-                        title="Tambah Tahun Ajaran Baru"
+                        title="Kelola Tahun Ajaran"
                         disabled={isSaving}
                       >
                         <Plus size={15} />
@@ -935,25 +958,38 @@ export default function StudentFormView({
                   <label className="block text-[10px] text-slate-400 font-bold mb-1 uppercase tracking-wider">
                     Kelas <span className="text-rose-500">*</span>
                   </label>
-                  <select
-                    value={kelas}
-                    onChange={(e) => {
-                      setField('kelas', e.target.value);
-                      if (e.target.value) clearErrStep2('kelas');
-                    }}
-                    className={`w-full bg-slate-50 text-slate-800 text-xs px-3.5 py-2.5 rounded-lg border focus:outline-none appearance-none transition-colors font-medium ${errClsStep2('kelas')}`}
-                    disabled={isReadOnly || isSaving}
-                    required
-                  >
-                    <option value="">Pilih Kelas...</option>
-                    <option value="X-A">X-A (Umum)</option>
-                    <option value="X-B">X-B (Umum)</option>
-                    <option value="X-C">X-C (Umum)</option>
-                    <option value="XI MIPA 1">XI MIPA 1 (Sains)</option>
-                    <option value="XI RPL 1">XI RPL 1 (Vokasi)</option>
-                    <option value="XII RPL 1">XII RPL 1 (Vokasi)</option>
-                    <option value="XII IPS 3">XII IPS 3 (Sosial)</option>
-                  </select>
+                  <div className="flex items-center space-x-2">
+                    <div className="relative flex-1">
+                      <select
+                        value={kelas}
+                        onChange={(e) => {
+                          setField('kelas', e.target.value);
+                          if (e.target.value) clearErrStep2('kelas');
+                        }}
+                        className={`w-full bg-slate-50 text-slate-800 text-xs px-3.5 py-2.5 rounded-lg border focus:outline-none appearance-none transition-colors font-medium ${errClsStep2('kelas')}`}
+                        disabled={isReadOnly || isSaving}
+                        required
+                      >
+                        <option value="">Pilih Kelas...</option>
+                        {classes.map((cls) => (
+                          <option key={cls.id} value={cls.name} disabled={!cls.isActive}>
+                            {cls.name} {!cls.isActive ? '(Nonaktif)' : ''}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    {!isReadOnly && (
+                      <button
+                        type="button"
+                        onClick={() => setShowManageClassesModal(true)}
+                        className="bg-emerald-600 hover:bg-emerald-500 text-white font-bold p-2.5 rounded-lg transition shrink-0 shadow-sm cursor-pointer"
+                        title="Kelola Kelas"
+                        disabled={isSaving}
+                      >
+                        <Plus size={15} />
+                      </button>
+                    )}
+                  </div>
                   {step2Errors.includes('kelas') && (
                     <p className="text-[10px] text-rose-500 mt-1 font-semibold">Kelas penempatan wajib dipilih.</p>
                   )}
@@ -962,36 +998,38 @@ export default function StudentFormView({
                 {/* Jurusan */}
                 <div>
                   <label className="block text-[10px] text-slate-400 font-bold mb-1 uppercase tracking-wider">
-                    Jurusan <span className="text-rose-500">*</span>
+                    Jurusan
                   </label>
                   <input
                     type="text"
                     placeholder="Contoh: Rekayasa Perangkat Lunak, IPS..."
                     value={jurusan}
-                    onChange={(e) => {
-                      setField('jurusan', e.target.value);
-                      if (e.target.value.trim()) clearErrStep2('jurusan');
-                    }}
-                    className={`w-full bg-slate-50 text-slate-800 placeholder-slate-400 text-xs px-3.5 py-2.5 rounded-lg border focus:outline-none transition ${errClsStep2('jurusan')}`}
+                    onChange={(e) => setField('jurusan', e.target.value)}
+                    className="w-full bg-slate-50 text-slate-800 placeholder-slate-400 text-xs px-3.5 py-2.5 rounded-lg border border-slate-200 focus:outline-none focus:border-emerald-500 transition"
                     disabled={isReadOnly || isSaving}
-                    required
                   />
-                  {step2Errors.includes('jurusan') && (
-                    <p className="text-[10px] text-rose-500 mt-1 font-semibold">Jurusan wajib diisi.</p>
-                  )}
                 </div>
 
                 {/* Asal Sekolah */}
                 <div>
-                  <label className="block text-[10px] text-slate-400 font-bold mb-1 uppercase tracking-wider">Asal Sekolah Sebelumnya</label>
+                  <label className="block text-[10px] text-slate-400 font-bold mb-1 uppercase tracking-wider">
+                    Asal Sekolah Sebelumnya <span className="text-rose-500">*</span>
+                  </label>
                   <input
                     type="text"
                     placeholder="Masukkan nama SMP / MTs asal..."
                     value={asalSekolah}
-                    onChange={(e) => setField('asalSekolah', e.target.value)}
-                    className="w-full bg-slate-50 text-slate-800 placeholder-slate-400 text-xs px-3.5 py-2.5 rounded-lg border border-slate-200 focus:outline-none focus:border-emerald-500 transition"
+                    onChange={(e) => {
+                      setField('asalSekolah', e.target.value);
+                      if (e.target.value.trim()) clearErrStep2('asalSekolah');
+                    }}
+                    className={`w-full bg-slate-50 text-slate-800 placeholder-slate-400 text-xs px-3.5 py-2.5 rounded-lg border focus:outline-none transition ${errClsStep2('asalSekolah')}`}
                     disabled={isReadOnly || isSaving}
+                    required
                   />
+                  {step2Errors.includes('asalSekolah') && (
+                    <p className="text-[10px] text-rose-500 mt-1 font-semibold">Asal sekolah wajib diisi.</p>
+                  )}
                 </div>
 
                 {/* Tahun Lulus Sebelumnya */}
@@ -1083,25 +1121,7 @@ export default function StudentFormView({
                 />
               </div>
 
-              {/* Navigation Controls */}
-              <div className="pt-4 border-t border-slate-100 flex justify-between items-center">
-                <button
-                  type="button"
-                  onClick={() => handleGoToStep('biodata')}
-                  className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold py-2 px-4 rounded-lg transition"
-                  disabled={isSaving}
-                >
-                  ← Kembali ke Biodata
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleGoToStep('keluarga')}
-                  className="bg-slate-900 hover:bg-slate-800 text-white font-bold py-2 px-4 rounded-lg tracking-wide transition"
-                  disabled={isSaving}
-                >
-                  Lanjut ke Data Keluarga →
-                </button>
-              </div>
+
             </div>
           )}
 
@@ -1181,6 +1201,7 @@ export default function StudentFormView({
                         placeholder="Pekerjaan Ayah..."
                         value={pekerjaanAyah}
                         onChange={(e) => setField('pekerjaanAyah', e.target.value)}
+                        list="indonesian-professions"
                         className="w-full bg-white text-slate-800 text-xs px-3 py-2.5 rounded-lg border border-slate-200 focus:outline-none focus:border-emerald-500 transition"
                         disabled={isReadOnly || isSaving}
                       />
@@ -1280,6 +1301,7 @@ export default function StudentFormView({
                         placeholder="Pekerjaan Ibu..."
                         value={pekerjaanIbu}
                         onChange={(e) => setField('pekerjaanIbu', e.target.value)}
+                        list="indonesian-professions"
                         className="w-full bg-white text-slate-800 text-xs px-3 py-2.5 rounded-lg border border-slate-200 focus:outline-none focus:border-emerald-500 transition"
                         disabled={isReadOnly || isSaving}
                       />
@@ -1371,16 +1393,18 @@ export default function StudentFormView({
                   </div>
                 </div>
 
-                {/* 4. INFORMASI KELUARGA LAINNYA */}
+                {/* 4. INFORMASI URUTAN ANAK & JUMLAH SAUDARA */}
                 <div className="p-5 bg-slate-50/50 rounded-xl border border-slate-200 space-y-4 lg:col-span-2">
                   <h5 className="font-extrabold text-slate-700 tracking-tight flex items-center gap-2 border-b border-slate-200 pb-2.5">
                     <span className="w-1.5 h-3 bg-teal-500 rounded-sm"></span>
-                    INFORMASI KELUARGA LAINNYA
+                    INFORMASI URUTAN ANAK & JUMLAH SAUDARA
                   </h5>
 
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div>
-                      <label className="block text-[10px] text-slate-400 font-bold mb-1 uppercase tracking-wider font-mono">Anak Ke-</label>
+                      <label className="block text-[10px] text-slate-400 font-bold mb-1 uppercase tracking-wider font-mono">
+                        Anak Ke- <span className="text-rose-500">*</span>
+                      </label>
                       <input
                         type="number"
                         placeholder="Masukkan urutan anak..."
@@ -1391,14 +1415,20 @@ export default function StudentFormView({
                         }}
                         className={`w-full bg-white text-slate-800 text-xs px-3 py-2.5 rounded-lg border focus:outline-none transition font-medium ${errClsStep3('anakKe')}`}
                         disabled={isReadOnly || isSaving}
+                        required
                       />
+                      {step3Errors.includes('anakKe') && (
+                        <p className="text-[10px] text-rose-500 mt-1 font-semibold">Anak ke wajib diisi.</p>
+                      )}
                       {step3Errors.includes('anakKe_range') && (
                         <p className="text-[10px] text-rose-500 mt-1 font-semibold">Anak ke harus antara 1 dan 20.</p>
                       )}
                     </div>
 
                     <div>
-                      <label className="block text-[10px] text-slate-400 font-bold mb-1 uppercase tracking-wider font-mono">Jumlah Saudara Kandung</label>
+                      <label className="block text-[10px] text-slate-400 font-bold mb-1 uppercase tracking-wider font-mono">
+                        Jumlah Saudara Kandung <span className="text-rose-500">*</span>
+                      </label>
                       <input
                         type="number"
                         placeholder="Masukkan jumlah saudara..."
@@ -1409,7 +1439,11 @@ export default function StudentFormView({
                         }}
                         className={`w-full bg-white text-slate-800 text-xs px-3 py-2.5 rounded-lg border focus:outline-none transition font-medium ${errClsStep3('jumlahSaudara')}`}
                         disabled={isReadOnly || isSaving}
+                        required
                       />
+                      {step3Errors.includes('jumlahSaudara') && (
+                        <p className="text-[10px] text-rose-500 mt-1 font-semibold">Jumlah saudara kandung wajib diisi.</p>
+                      )}
                       {step3Errors.includes('jumlahSaudara_range') && (
                         <p className="text-[10px] text-rose-500 mt-1 font-semibold">Jumlah saudara harus antara 0 dan 20.</p>
                       )}
@@ -1453,20 +1487,7 @@ export default function StudentFormView({
 
               </div>
 
-              {/* Navigation Controls */}
-              <div className="pt-4 border-t border-slate-100 flex justify-between items-center">
-                <button
-                  type="button"
-                  onClick={() => handleGoToStep('akademik')}
-                  className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold py-2 px-4 rounded-lg transition cursor-pointer"
-                  disabled={isSaving}
-                >
-                  ← Kembali ke Akademik
-                </button>
-                <div className="text-[10.5px] text-slate-400 font-medium">
-                  Semua kolom sudah terisi? Klik "Lanjutkan ke Upload Dokumen" di bawah.
-                </div>
-              </div>
+
             </div>
           )}
 
@@ -1524,25 +1545,74 @@ export default function StudentFormView({
                       {/* File Display / Action Area */}
                       <div className="pt-2 border-t border-slate-100/50">
                         {uploaded || pending ? (
-                          <div className="bg-white border border-slate-200 rounded-lg p-2.5 flex items-center justify-between gap-3 shadow-2xs">
-                            <div className="min-w-0 flex-1">
-                              <p className="font-semibold text-slate-700 text-xs truncate">
-                                {pending ? pending.name : uploaded.name}
-                              </p>
-                              <p className="text-[10px] text-slate-400 mt-0.5">
-                                {pending ? formatSize(pending.size) : uploaded.size}
-                              </p>
+                          <div className={`bg-white border rounded-lg p-2.5 flex flex-col gap-2 shadow-2xs ${pending && uploadErrors[docItem.key] ? 'border-rose-300 bg-rose-50/10' : 'border-slate-200'}`}>
+                            <div className="flex items-center justify-between gap-3">
+                              <div className="min-w-0 flex-1">
+                                <p className="font-semibold text-slate-700 text-xs truncate">
+                                  {pending ? pending.name : uploaded.name}
+                                </p>
+                                <p className="text-[10px] text-slate-400 mt-0.5">
+                                  {pending ? formatSize(pending.size) : uploaded.size}
+                                </p>
+                              </div>
+                              
+                              <div className="flex items-center space-x-1 shrink-0">
+                                {pending && uploadErrors[docItem.key] && loadedStudentId && loadedStudentId !== 'new' && !isReadOnly && (
+                                  <button
+                                    type="button"
+                                    onClick={async () => {
+                                      try {
+                                        addToast(`Mengunggah ulang ${docItem.label}...`, 'info');
+                                        const result = await useStudentFormStore.getState().flushPendingUploads(loadedStudentId, docItem.key);
+                                        if (result.success) {
+                                          addToast(`${docItem.label} berhasil diunggah!`, 'success');
+                                        } else {
+                                          addToast(`Gagal mengunggah ulang ${docItem.label}`, 'error');
+                                        }
+                                      } catch (err: any) {
+                                        addToast(`Gagal mengunggah ulang: ${getFriendlyErrorMessage(err)}`, 'error');
+                                      }
+                                    }}
+                                    className="bg-amber-600 hover:bg-amber-500 text-white px-2 py-1 rounded text-[10px] font-bold transition cursor-pointer"
+                                    title="Unggah Ulang"
+                                  >
+                                    Coba Lagi
+                                  </button>
+                                )}
+                                {!isReadOnly && (
+                                  <button
+                                    type="button"
+                                    onClick={() => handleFileChange(docItem.key, null)}
+                                    className="text-rose-500 hover:text-rose-700 hover:bg-rose-50 p-1.5 rounded-lg transition cursor-pointer"
+                                    title="Hapus Berkas"
+                                  >
+                                    <Trash2 size={14} />
+                                  </button>
+                                )}
+                              </div>
                             </div>
-                            
-                            {!isReadOnly && (
-                              <button
-                                type="button"
-                                onClick={() => handleFileChange(docItem.key, null)}
-                                className="text-rose-500 hover:text-rose-700 hover:bg-rose-50 p-1.5 rounded-lg transition shrink-0 cursor-pointer"
-                                title="Hapus Berkas"
-                              >
-                                <Trash2 size={14} />
-                              </button>
+
+                            {/* Progress bar */}
+                            {pending && uploadProgress[docItem.key] > 0 && uploadProgress[docItem.key] < 100 && (
+                              <div className="space-y-1">
+                                <div className="flex justify-between text-[9px] text-slate-400 font-bold uppercase">
+                                  <span>Mengunggah...</span>
+                                  <span>{uploadProgress[docItem.key]}%</span>
+                                </div>
+                                <div className="w-full bg-slate-100 rounded-full h-1">
+                                  <div 
+                                    className="bg-emerald-500 h-1 rounded-full transition-all duration-300" 
+                                    style={{ width: `${uploadProgress[docItem.key]}%` }}
+                                  ></div>
+                                </div>
+                              </div>
+                            )}
+
+                            {/* Error text */}
+                            {pending && uploadErrors[docItem.key] && (
+                              <p className="text-[10px] text-rose-600 font-medium">
+                                Error: {uploadErrors[docItem.key]}
+                              </p>
                             )}
                           </div>
                         ) : (
@@ -1575,20 +1645,7 @@ export default function StudentFormView({
                 })}
               </div>
 
-              {/* Navigation Controls */}
-              <div className="pt-4 border-t border-slate-100 flex justify-between items-center">
-                <button
-                  type="button"
-                  onClick={() => handleGoToStep('keluarga')}
-                  className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold py-2 px-4 rounded-lg transition cursor-pointer"
-                  disabled={isSaving}
-                >
-                  ← Kembali ke Keluarga
-                </button>
-                <div className="text-[10px] text-slate-400">
-                  Dokumen ditandai <span className="text-rose-500">*</span> dianjurkan untuk kelengkapan administrasi.
-                </div>
-              </div>
+
             </div>
           )}
 
@@ -1767,10 +1824,43 @@ export default function StudentFormView({
                               {uploaded.name}
                             </p>
                           ) : pending ? (
-                            <p className="text-blue-700 font-semibold text-xs truncate flex items-center gap-1 animate-pulse" title={pending.name}>
-                              <span className="w-1.5 h-1.5 bg-blue-500 rounded-full shrink-0"></span>
-                              {pending.name} (Unggah)
-                            </p>
+                            <div className="space-y-1">
+                              <p className={`font-semibold text-xs truncate flex items-center gap-1 ${uploadErrors[d.key] ? 'text-rose-600 font-bold' : 'text-blue-700 animate-pulse'}`} title={pending.name}>
+                                <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${uploadErrors[d.key] ? 'bg-rose-500' : 'bg-blue-500'}`}></span>
+                                {pending.name}
+                              </p>
+                              {uploadProgress[d.key] > 0 && uploadProgress[d.key] < 100 && (
+                                <div className="text-[9px] text-slate-400">
+                                  Mengunggah... {uploadProgress[d.key]}%
+                                </div>
+                              )}
+                              {uploadErrors[d.key] && (
+                                <p className="text-[9px] text-rose-500 truncate font-medium" title={uploadErrors[d.key]}>
+                                  Error: {uploadErrors[d.key]}
+                                </p>
+                              )}
+                              {uploadErrors[d.key] && loadedStudentId && loadedStudentId !== 'new' && !isReadOnly && (
+                                <button
+                                  type="button"
+                                  onClick={async () => {
+                                    try {
+                                      addToast(`Mengunggah ulang ${d.label}...`, 'info');
+                                      const result = await useStudentFormStore.getState().flushPendingUploads(loadedStudentId, d.key);
+                                      if (result.success) {
+                                        addToast(`${d.label} berhasil diunggah!`, 'success');
+                                      } else {
+                                        addToast(`Gagal mengunggah ulang ${d.label}`, 'error');
+                                      }
+                                    } catch (err: any) {
+                                      addToast(`Gagal mengunggah ulang: ${getFriendlyErrorMessage(err)}`, 'error');
+                                    }
+                                  }}
+                                  className="mt-1 bg-amber-600 hover:bg-amber-500 text-white px-2 py-0.5 rounded text-[9px] font-bold transition w-full text-center cursor-pointer"
+                                >
+                                  Coba Lagi
+                                </button>
+                              )}
+                            </div>
                           ) : (
                             <p className="text-slate-400 italic text-[11px]">Belum diunggah</p>
                           )}
@@ -1781,164 +1871,579 @@ export default function StudentFormView({
                 </div>
               </div>
 
-              {/* Navigation Controls */}
-              <div className="pt-4 border-t border-slate-100 flex justify-between items-center">
-                <button
-                  type="button"
-                  onClick={() => handleGoToStep('dokumen')}
-                  className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold py-2 px-4 rounded-lg transition cursor-pointer"
-                  disabled={isSaving}
-                >
-                  ← Kembali ke Dokumen
-                </button>
-                <div className="text-[10px] text-slate-400 font-bold text-emerald-600">
-                  Data yang terisi sudah valid dan siap disimpan ke sistem.
-                </div>
-              </div>
+
             </div>
           )}
 
           {/* BOTTOM CONTROLS & SUBMIT ACTION (SHARED) */}
-          <div className="pt-5 border-t border-slate-100 flex items-center justify-end space-x-3 bg-slate-50/40 p-4 -mx-6 -mb-6">
-            {!editingStudent && !isReadOnly && (
-              <div className="mr-auto flex items-center gap-2">
-                {!showClearConfirm ? (
-                  <button
-                    type="button"
-                    onClick={() => setShowClearConfirm(true)}
-                    disabled={isSaving}
-                    className="border border-red-200 hover:border-red-500 hover:bg-red-50/50 text-red-650 font-bold py-2.5 px-4 rounded-lg transition flex items-center space-x-1.5 disabled:opacity-50 cursor-pointer shadow-2xs"
-                  >
-                    <Trash2 size={14} className="text-red-500" />
-                    <span className="text-red-600">Kosongkan Form</span>
-                  </button>
-                ) : (
-                  <div className="flex items-center gap-2.5 bg-red-50 border border-red-200 rounded-lg p-1.5 px-3">
-                    <span className="text-red-700 font-extrabold text-[11px]">Bersihkan semua field?</span>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        clearForm();
-                        setField('loadedStudentId', 'new');
-                        setShowClearConfirm(false);
-                        onAddNotification('Formulir Dikosongkan', 'Seluruh isian formulir berhasil dikosongkan.', 'info');
-                      }}
-                      className="bg-red-600 hover:bg-red-700 text-white font-extrabold py-1 px-3 rounded-md transition text-[10px] cursor-pointer shadow-xs"
-                    >
-                      Ya, Bersihkan
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setShowClearConfirm(false)}
-                      className="bg-white hover:bg-slate-100 text-slate-650 border border-slate-200 font-extrabold py-1 px-3 rounded-md transition text-[10px] cursor-pointer shadow-2xs"
-                    >
-                      Batal
-                    </button>
-                  </div>
-                )}
-              </div>
-            )}
-            
-            <button
-              type="button"
-              onClick={onCancel}
-              disabled={isSaving}
-              className="bg-slate-200 hover:bg-slate-300 disabled:opacity-50 text-slate-700 font-bold py-2.5 px-5 rounded-lg transition cursor-pointer"
-            >
-              {isReadOnly ? 'Tutup Peninjauan' : 'Batalkan'}
-            </button>
-
-            {!isReadOnly && (
-              activeTab === 'review' ? (
-                <button
-                  type="submit"
-                  disabled={isSaving}
-                  className="bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white font-bold py-2.5 px-6 rounded-lg transition shadow-md hover:shadow-emerald-600/10 flex items-center space-x-2 cursor-pointer"
-                >
-                  {isSaving ? (
-                    <RefreshCw size={14} className="animate-spin" />
-                  ) : (
-                    <Save size={14} />
-                  )}
-                  <span>
-                    {isSaving 
-                      ? 'Menyimpan...' 
-                      : (editingStudent ? 'Perbaharui Profil' : 'Simpan Pendaftaran')}
-                  </span>
-                </button>
-              ) : (
+          <div className="pt-5 border-t border-slate-100 flex flex-col sm:flex-row items-center justify-between gap-4 bg-slate-50/40 p-4 -mx-6 -mb-6">
+            {/* Left side: Back Button & Step-specific Hint Text */}
+            <div className="flex flex-wrap items-center gap-3 w-full sm:w-auto">
+              {activeTab !== 'biodata' && (
                 <button
                   type="button"
-                  onClick={() => {
-                    if (activeTab === 'biodata') handleGoToStep('akademik');
-                    else if (activeTab === 'akademik') handleGoToStep('keluarga');
-                    else if (activeTab === 'keluarga') handleGoToStep('dokumen');
-                    else if (activeTab === 'dokumen') handleGoToStep('review');
+                  onClick={(e) => {
+                    e.preventDefault();
+                    if (activeTab === 'akademik') handleGoToStep('biodata');
+                    else if (activeTab === 'keluarga') handleGoToStep('akademik');
+                    else if (activeTab === 'dokumen') handleGoToStep('keluarga');
+                    else if (activeTab === 'review') handleGoToStep('dokumen');
                   }}
-                  className="bg-slate-900 hover:bg-slate-800 text-white font-bold py-2.5 px-6 rounded-lg transition shadow-md flex items-center space-x-2 cursor-pointer"
+                  className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold py-2 px-4 rounded-lg transition text-xs flex items-center space-x-1.5 cursor-pointer shadow-2xs"
+                  disabled={isSaving}
                 >
-                  <span>
-                    {activeTab === 'biodata' && 'Lanjutkan ke Akademik →'}
-                    {activeTab === 'akademik' && 'Lanjutkan ke Keluarga →'}
-                    {activeTab === 'keluarga' && 'Lanjutkan ke Upload Dokumen →'}
-                    {activeTab === 'dokumen' && 'Lanjutkan ke Review & Simpan →'}
-                  </span>
+                  <span>← Kembali</span>
                 </button>
-              )
-            )}
+              )}
+              
+              <div className="text-[11px] text-slate-400 font-medium">
+                {activeTab === 'biodata' && (
+                  <span>
+                    Semua kolom bertanda <span className="text-rose-500 font-bold">*</span> wajib diisi.
+                  </span>
+                )}
+                {activeTab === 'keluarga' && (
+                  <span>
+                    Semua kolom sudah terisi? Silakan lanjutkan ke langkah berikutnya.
+                  </span>
+                )}
+                {activeTab === 'dokumen' && (
+                  <span>
+                    Dokumen ditandai <span className="text-rose-500 font-bold">*</span> dianjurkan untuk kelengkapan administrasi.
+                  </span>
+                )}
+                {activeTab === 'review' && (
+                  <span className="text-emerald-600 font-bold">
+                    Data yang terisi sudah valid dan siap disimpan ke sistem.
+                  </span>
+                )}
+              </div>
+            </div>
+
+            {/* Right side: Clear Form, Cancel, and Forward/Save buttons */}
+            <div className="flex items-center justify-end gap-3 w-full sm:w-auto shrink-0">
+              {!editingStudent && !isReadOnly && (
+                <div className="flex items-center gap-2">
+                  {!showClearConfirm ? (
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.preventDefault();
+                        setShowClearConfirm(true);
+                      }}
+                      disabled={isSaving}
+                      className="border border-red-200 hover:border-red-500 hover:bg-red-50/50 text-red-600 font-bold py-2.5 px-4 rounded-lg transition flex items-center space-x-1.5 disabled:opacity-50 cursor-pointer shadow-2xs"
+                    >
+                      <Trash2 size={14} className="text-red-500" />
+                      <span className="text-red-600">Kosongkan Form</span>
+                    </button>
+                  ) : (
+                    <div className="flex items-center gap-2.5 bg-red-50 border border-red-200 rounded-lg p-1.5 px-3">
+                      <span className="text-red-700 font-extrabold text-[11px]">Bersihkan semua?</span>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.preventDefault();
+                          clearForm();
+                          setField('loadedStudentId', 'new');
+                          setShowClearConfirm(false);
+                          onAddNotification('Formulir Dikosongkan', 'Seluruh isian formulir berhasil dikosongkan.', 'info');
+                        }}
+                        className="bg-red-600 hover:bg-red-700 text-white font-extrabold py-1 px-3 rounded-md transition text-[10px] cursor-pointer shadow-xs"
+                      >
+                        Ya
+                      </button>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.preventDefault();
+                          setShowClearConfirm(false);
+                        }}
+                        className="bg-white hover:bg-slate-100 text-slate-700 border border-slate-200 font-extrabold py-1 px-3 rounded-md transition text-[10px] cursor-pointer shadow-2xs"
+                      >
+                        Batal
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
+              
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.preventDefault();
+                  onCancel();
+                }}
+                disabled={isSaving}
+                className="bg-slate-200 hover:bg-slate-300 disabled:opacity-50 text-slate-700 font-bold py-2.5 px-5 rounded-lg transition cursor-pointer text-xs"
+              >
+                {isReadOnly ? 'Tutup Peninjauan' : 'Batalkan'}
+              </button>
+
+              {!isReadOnly && (
+                activeTab === 'review' ? (
+                  <button
+                    type="submit"
+                    disabled={isSaving}
+                    className="bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white font-bold py-2.5 px-6 rounded-lg transition shadow-md hover:shadow-emerald-600/10 flex items-center space-x-2 cursor-pointer text-xs"
+                  >
+                    {isSaving ? (
+                      <RefreshCw size={14} className="animate-spin" />
+                    ) : (
+                      <Save size={14} />
+                    )}
+                    <span>
+                      {isSaving 
+                        ? 'Menyimpan...' 
+                        : (editingStudent ? 'Perbaharui Profil' : 'Simpan Pendaftaran')}
+                    </span>
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.preventDefault();
+                      if (activeTab === 'biodata') handleGoToStep('akademik');
+                      else if (activeTab === 'akademik') handleGoToStep('keluarga');
+                      else if (activeTab === 'keluarga') handleGoToStep('dokumen');
+                      else if (activeTab === 'dokumen') handleGoToStep('review');
+                    }}
+                    className="bg-slate-900 hover:bg-slate-800 text-white font-bold py-2.5 px-6 rounded-lg transition shadow-md flex items-center space-x-2 cursor-pointer text-xs"
+                  >
+                    <span>
+                      {activeTab === 'biodata' && 'Lanjutkan ke Akademik →'}
+                      {activeTab === 'akademik' && 'Lanjutkan ke Keluarga →'}
+                      {activeTab === 'keluarga' && 'Lanjutkan ke Upload Dokumen →'}
+                      {activeTab === 'dokumen' && 'Lanjutkan ke Review →'}
+                    </span>
+                  </button>
+                )
+              )}
+            </div>
           </div>
         </form>
       </div>
 
-      {/* ADD ACADEMIC YEAR MODAL */}
-      {showAddAyModal && (
+      {/* MANAGE ACADEMIC YEARS MODAL */}
+      {showManageAyModal && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center z-[60] p-4">
-          <div className="bg-white rounded-xl border border-slate-200 shadow-2xl max-w-sm w-full p-6 space-y-4">
+          <div className="bg-white rounded-xl border border-slate-200 shadow-2xl max-w-lg w-full p-6 space-y-4">
             <div className="flex justify-between items-center border-b border-slate-100 pb-3">
-              <h4 className="font-bold text-slate-800 text-sm">Tambah Tahun Ajaran Baru</h4>
+              <h4 className="font-bold text-slate-800 text-sm">Kelola Tahun Ajaran</h4>
               <button 
                 type="button" 
-                onClick={() => { setShowAddAyModal(false); setNewAyName(''); }}
-                className="text-slate-400 hover:text-slate-600 transition"
+                onClick={() => {
+                  setShowManageAyModal(false);
+                  setNewAyName('');
+                  setEditingClassId(null);
+                }}
+                className="text-slate-400 hover:text-slate-600 transition cursor-pointer"
               >
                 <X size={16} />
               </button>
             </div>
-            
-            <form onSubmit={handleAddAcademicYear} className="space-y-4">
-              <div>
-                <label className="block text-[10px] text-slate-400 font-bold mb-1.5 uppercase tracking-wider">Nama Tahun Ajaran</label>
+
+            {/* Tambah Tahun Ajaran Baru Form */}
+            <div className="p-4 bg-slate-50 rounded-lg border border-slate-100 space-y-3 text-xs">
+              <h5 className="font-bold text-[10px] text-slate-500 uppercase tracking-wider">Tambah Tahun Ajaran Baru</h5>
+              <div className="flex items-center space-x-2">
                 <input
                   type="text"
                   placeholder="Format: YYYY/YYYY (misal: 2025/2026)"
                   value={newAyName}
                   onChange={(e) => setNewAyName(e.target.value)}
-                  className="w-full bg-slate-50 text-slate-800 placeholder-slate-400 text-xs px-3.5 py-2.5 rounded-lg border border-slate-200 focus:outline-none focus:border-emerald-500 transition font-medium"
-                  required
-                  autoFocus
+                  className="bg-white text-slate-800 text-xs px-3 py-2 rounded-lg border border-slate-200 focus:outline-none focus:border-emerald-500 transition font-medium flex-1"
                 />
-              </div>
-
-              <div className="flex justify-end space-x-2 pt-2 text-xs">
                 <button
                   type="button"
-                  onClick={() => { setShowAddAyModal(false); setNewAyName(''); }}
-                  className="bg-slate-100 hover:bg-slate-200 text-slate-700 px-4 py-2 rounded-lg font-bold transition"
-                >
-                  Batal
-                </button>
-                <button
-                  type="submit"
+                  onClick={async () => {
+                    const trimmed = newAyName.trim();
+                    if (!trimmed) {
+                      addToast('Nama Tahun Ajaran tidak boleh kosong!', 'warning');
+                      return;
+                    }
+                    if (!/^\d{4}\/\d{4}$/.test(trimmed)) {
+                      addToast('Format Tahun Ajaran harus YYYY/YYYY (contoh: 2025/2026)!', 'warning');
+                      return;
+                    }
+                    setIsAddingAy(true);
+                    try {
+                      const created = await studentService.createAcademicYear(trimmed);
+                      setAcademicYears((prev) => [created, ...prev].sort((a, b) => b.name.localeCompare(a.name)));
+                      setNewAyName('');
+                      addToast('Tahun Ajaran berhasil dibuat!', 'success');
+                    } catch (err: any) {
+                      addToast(`Gagal membuat Tahun Ajaran: ${getFriendlyErrorMessage(err)}`, 'error');
+                    } finally {
+                      setIsAddingAy(false);
+                    }
+                  }}
                   disabled={isAddingAy}
-                  className="bg-emerald-600 hover:bg-emerald-500 text-white px-4 py-2 rounded-lg font-bold transition disabled:opacity-50"
+                  className="bg-emerald-600 hover:bg-emerald-500 text-white px-4 py-2 rounded-lg text-xs font-bold transition disabled:opacity-50 cursor-pointer"
                 >
-                  {isAddingAy ? 'Menyimpan...' : 'Simpan'}
+                  {isAddingAy ? 'Menyimpan...' : 'Tambah'}
                 </button>
               </div>
-            </form>
+            </div>
+
+            {/* List Tahun Ajaran */}
+            <div className="space-y-2 max-h-60 overflow-y-auto pr-1 text-xs">
+              <h5 className="font-bold text-[10px] text-slate-500 uppercase tracking-wider">Daftar Tahun Ajaran</h5>
+              {academicYears.length === 0 ? (
+                <p className="text-slate-400 text-center py-4 text-xs">Belum ada tahun ajaran terdaftar.</p>
+              ) : (
+                academicYears.map((ay) => {
+                  const isEditing = editingClassId === ay.id;
+                  return (
+                    <div key={ay.id} className="flex items-center justify-between p-3 rounded-lg border border-slate-100 hover:bg-slate-50 transition gap-2">
+                      {isEditing ? (
+                        <div className="flex-1 flex items-center space-x-2">
+                          <input
+                            type="text"
+                            value={editingClassName}
+                            onChange={(e) => setEditingClassName(e.target.value)}
+                            className="bg-white text-slate-800 text-xs px-3 py-1 rounded-md border border-slate-200 focus:outline-none focus:border-emerald-500 transition flex-1"
+                          />
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              const trimmed = editingClassName.trim();
+                              if (!trimmed) {
+                                addToast('Nama Tahun Ajaran tidak boleh kosong!', 'warning');
+                                return;
+                              }
+                              if (!/^\d{4}\/\d{4}$/.test(trimmed)) {
+                                addToast('Format harus YYYY/YYYY!', 'warning');
+                                return;
+                              }
+                              try {
+                                const updated = await studentService.updateAcademicYear(ay.id, { name: trimmed });
+                                setAcademicYears((prev) => prev.map((y) => (y.id === ay.id ? updated : y)).sort((a, b) => b.name.localeCompare(a.name)));
+                                setEditingClassId(null);
+                                addToast('Tahun Ajaran berhasil diperbarui!', 'success');
+                              } catch (err: any) {
+                                addToast(`Gagal memperbarui: ${getFriendlyErrorMessage(err)}`, 'error');
+                              }
+                            }}
+                            className="bg-emerald-600 hover:bg-emerald-500 text-white px-2 py-1 rounded-md text-[10px] font-bold cursor-pointer"
+                          >
+                            Simpan
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setEditingClassId(null)}
+                            className="bg-slate-200 hover:bg-slate-300 text-slate-700 px-2 py-1 rounded-md text-[10px] font-bold cursor-pointer"
+                          >
+                            Batal
+                          </button>
+                        </div>
+                      ) : (
+                        <>
+                          <div className="flex-1 min-w-0 flex items-center space-x-2">
+                            <span className="font-bold text-xs text-slate-800">{ay.name}</span>
+                            {ay.isActive && (
+                              <span className="text-[9px] px-1.5 py-0.5 rounded-full font-bold uppercase tracking-wider bg-emerald-100 text-emerald-800">
+                                Aktif
+                              </span>
+                            )}
+                          </div>
+                          <div className="flex items-center space-x-1.5">
+                            {!ay.isActive && (
+                              <button
+                                type="button"
+                                onClick={async () => {
+                                  try {
+                                    await studentService.setActiveAcademicYear(ay.id);
+                                    const refreshed = await studentService.getAcademicYears();
+                                    setAcademicYears(refreshed);
+                                    setField('academicYearId', ay.id);
+                                    addToast(`Tahun Ajaran ${ay.name} sekarang Aktif!`, 'success');
+                                  } catch (err: any) {
+                                    addToast(`Gagal mengaktifkan: ${getFriendlyErrorMessage(err)}`, 'error');
+                                  }
+                                }}
+                                className="bg-emerald-50 hover:bg-emerald-100 text-emerald-700 px-2.5 py-1 rounded-md text-[10px] font-bold transition cursor-pointer"
+                              >
+                                Set Aktif
+                              </button>
+                            )}
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setEditingClassId(ay.id);
+                                setEditingClassName(ay.name);
+                              }}
+                              className="text-slate-500 hover:text-emerald-600 p-1.5 rounded-md hover:bg-white border border-transparent hover:border-slate-200 transition cursor-pointer"
+                              title="Edit Tahun Ajaran"
+                            >
+                              <Edit2 size={13} />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={async () => {
+                                if (window.confirm(`Apakah Anda yakin ingin menghapus Tahun Ajaran "${ay.name}"?`)) {
+                                  try {
+                                    await studentService.deleteAcademicYear(ay.id);
+                                    setAcademicYears((prev) => prev.filter((y) => y.id !== ay.id));
+                                    addToast('Tahun Ajaran berhasil dihapus!', 'success');
+                                  } catch (err: any) {
+                                    addToast(`Gagal menghapus: ${getFriendlyErrorMessage(err)}`, 'error');
+                                  }
+                                }
+                              }}
+                              className="text-rose-500 hover:text-rose-700 p-1.5 rounded-md hover:bg-rose-50 transition cursor-pointer"
+                              title="Hapus Tahun Ajaran"
+                            >
+                              <Trash2 size={13} />
+                            </button>
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  );
+                })
+              )}
+            </div>
+
+            <div className="flex justify-end pt-2 text-xs">
+              <button
+                type="button"
+                onClick={() => setShowManageAyModal(false)}
+                className="bg-slate-100 hover:bg-slate-200 text-slate-700 px-4 py-2 rounded-lg font-bold transition cursor-pointer"
+              >
+                Tutup
+              </button>
+            </div>
           </div>
         </div>
       )}
+
+      {/* MANAGE CLASSES MODAL */}
+      {showManageClassesModal && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center z-[60] p-4">
+          <div className="bg-white rounded-xl border border-slate-200 shadow-2xl max-w-lg w-full p-6 space-y-4">
+            <div className="flex justify-between items-center border-b border-slate-100 pb-3">
+              <h4 className="font-bold text-slate-800 text-sm">Kelola Master Kelas</h4>
+              <button 
+                type="button" 
+                onClick={() => {
+                  setShowManageClassesModal(false);
+                  setNewClassName('');
+                  setNewClassDesc('');
+                  setEditingClassId(null);
+                }}
+                className="text-slate-400 hover:text-slate-600 transition cursor-pointer"
+              >
+                <X size={16} />
+              </button>
+            </div>
+
+            {/* Tambah Kelas Baru Form */}
+            <div className="p-4 bg-slate-50 rounded-lg border border-slate-100 space-y-3 text-xs">
+              <h5 className="font-bold text-[10px] text-slate-500 uppercase tracking-wider">Tambah Kelas Baru</h5>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <input
+                  type="text"
+                  placeholder="Nama Kelas (misal: X-A, XII RPL)"
+                  value={newClassName}
+                  onChange={(e) => setNewClassName(e.target.value)}
+                  className="bg-white text-slate-800 text-xs px-3 py-2 rounded-lg border border-slate-200 focus:outline-none focus:border-emerald-500 transition font-medium"
+                />
+                <input
+                  type="text"
+                  placeholder="Deskripsi Kelas (opsional)"
+                  value={newClassDesc}
+                  onChange={(e) => setNewClassDesc(e.target.value)}
+                  className="bg-white text-slate-800 text-xs px-3 py-2 rounded-lg border border-slate-200 focus:outline-none focus:border-emerald-500 transition font-medium"
+                />
+              </div>
+              <button
+                type="button"
+                onClick={async () => {
+                  const trimmed = newClassName.trim();
+                  if (!trimmed) {
+                    addToast('Nama Kelas tidak boleh kosong!', 'warning');
+                    return;
+                  }
+                  setIsSavingClass(true);
+                  try {
+                    const created = await studentService.createClass(trimmed, newClassDesc.trim() || undefined);
+                    setClasses((prev) => [...prev, created].sort((a, b) => a.name.localeCompare(b.name)));
+                    setNewClassName('');
+                    setNewClassDesc('');
+                    addToast('Kelas berhasil dibuat!', 'success');
+                  } catch (err: any) {
+                    addToast(`Gagal membuat kelas: ${getFriendlyErrorMessage(err)}`, 'error');
+                  } finally {
+                    setIsSavingClass(false);
+                  }
+                }}
+                disabled={isSavingClass}
+                className="w-full bg-emerald-600 hover:bg-emerald-500 text-white py-1.5 rounded-lg text-xs font-bold transition disabled:opacity-50 cursor-pointer"
+              >
+                {isSavingClass ? 'Menyimpan...' : 'Tambah Kelas'}
+              </button>
+            </div>
+
+            {/* List Kelas */}
+            <div className="space-y-2 max-h-60 overflow-y-auto pr-1 text-xs">
+              <h5 className="font-bold text-[10px] text-slate-500 uppercase tracking-wider">Daftar Kelas</h5>
+              {classes.length === 0 ? (
+                <p className="text-slate-400 text-center py-4 text-xs">Belum ada kelas yang terdaftar.</p>
+              ) : (
+                classes.map((cls) => {
+                  const isEditing = editingClassId === cls.id;
+                  return (
+                    <div key={cls.id} className="flex flex-col sm:flex-row sm:items-center justify-between p-3 rounded-lg border border-slate-100 hover:bg-slate-50 transition gap-2">
+                      {isEditing ? (
+                        <div className="flex-1 space-y-2">
+                          <input
+                            type="text"
+                            value={editingClassName}
+                            onChange={(e) => setEditingClassName(e.target.value)}
+                            className="bg-white text-slate-800 text-xs px-3 py-1 rounded-md border border-slate-200 focus:outline-none focus:border-emerald-500 transition w-full"
+                          />
+                          <input
+                            type="text"
+                            value={editingClassDesc}
+                            onChange={(e) => setEditingClassDesc(e.target.value)}
+                            className="bg-white text-slate-800 text-xs px-3 py-1 rounded-md border border-slate-200 focus:outline-none focus:border-emerald-500 transition w-full"
+                            placeholder="Deskripsi..."
+                          />
+                          <div className="flex space-x-1.5">
+                            <button
+                              type="button"
+                              onClick={async () => {
+                                const trimmed = editingClassName.trim();
+                                if (!trimmed) {
+                                  addToast('Nama kelas tidak boleh kosong!', 'warning');
+                                  return;
+                                }
+                                try {
+                                  const updated = await studentService.updateClass(cls.id, { name: trimmed, description: editingClassDesc.trim() || undefined });
+                                  setClasses((prev) => prev.map((c) => (c.id === cls.id ? updated : c)).sort((a, b) => a.name.localeCompare(b.name)));
+                                  setEditingClassId(null);
+                                  addToast('Kelas berhasil diperbarui!', 'success');
+                                } catch (err: any) {
+                                  addToast(`Gagal memperbarui kelas: ${getFriendlyErrorMessage(err)}`, 'error');
+                                }
+                              }}
+                              className="bg-emerald-600 hover:bg-emerald-500 text-white px-2.5 py-1 rounded-md text-[10px] font-bold cursor-pointer"
+                            >
+                              Simpan
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setEditingClassId(null)}
+                              className="bg-slate-200 hover:bg-slate-300 text-slate-700 px-2.5 py-1 rounded-md text-[10px] font-bold cursor-pointer"
+                            >
+                              Batal
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <>
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center space-x-2">
+                              <span className={`font-bold text-xs ${cls.isActive ? 'text-slate-800' : 'text-slate-400 line-through'}`}>
+                                {cls.name}
+                              </span>
+                              <span className={`text-[9px] px-1.5 py-0.5 rounded-full font-bold uppercase tracking-wider ${cls.isActive ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-100 text-slate-400'}`}>
+                                {cls.isActive ? 'Aktif' : 'Nonaktif'}
+                              </span>
+                            </div>
+                            {cls.description && (
+                              <p className="text-[10px] text-slate-400 mt-0.5 truncate">{cls.description}</p>
+                            )}
+                          </div>
+                          <div className="flex items-center space-x-1.5">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setEditingClassId(cls.id);
+                                setEditingClassName(cls.name);
+                                setEditingClassDesc(cls.description || '');
+                              }}
+                              className="text-slate-500 hover:text-emerald-600 p-1.5 rounded-md hover:bg-white border border-transparent hover:border-slate-200 transition cursor-pointer"
+                              title="Edit Kelas"
+                            >
+                              <Edit2 size={13} />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={async () => {
+                                try {
+                                  const updated = await studentService.updateClass(cls.id, { isActive: !cls.isActive });
+                                  setClasses((prev) => prev.map((c) => (c.id === cls.id ? updated : c)));
+                                  addToast(cls.isActive ? 'Kelas dinonaktifkan!' : 'Kelas diaktifkan!', 'success');
+                                } catch (err: any) {
+                                  addToast(`Gagal mengubah status: ${getFriendlyErrorMessage(err)}`, 'error');
+                                }
+                              }}
+                              className={`p-1.5 rounded-md border border-transparent hover:border-slate-200 transition cursor-pointer ${cls.isActive ? 'text-rose-500 hover:bg-rose-50' : 'text-emerald-500 hover:bg-emerald-50'}`}
+                              title={cls.isActive ? 'Nonaktifkan' : 'Aktifkan'}
+                            >
+                              {cls.isActive ? 'Nonaktifkan' : 'Aktifkan'}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={async () => {
+                                if (window.confirm(`Apakah Anda yakin ingin menghapus kelas "${cls.name}"?`)) {
+                                  try {
+                                    await studentService.deleteClass(cls.id);
+                                    setClasses((prev) => prev.map((c) => (c.id === cls.id ? { ...c, isActive: false } : c)));
+                                    addToast('Kelas berhasil dihapus (nonaktif)!', 'success');
+                                  } catch (err: any) {
+                                    addToast(`Gagal menghapus kelas: ${getFriendlyErrorMessage(err)}`, 'error');
+                                  }
+                                }
+                              }}
+                              className="text-rose-500 hover:text-rose-700 p-1.5 rounded-md hover:bg-rose-50 transition cursor-pointer"
+                              title="Hapus Kelas"
+                            >
+                              <Trash2 size={13} />
+                            </button>
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  );
+                })
+              )}
+            </div>
+
+            <div className="flex justify-end pt-2 text-xs">
+              <button
+                type="button"
+                onClick={() => setShowManageClassesModal(false)}
+                className="bg-slate-100 hover:bg-slate-200 text-slate-700 px-4 py-2 rounded-lg font-bold transition cursor-pointer"
+              >
+                Tutup
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* INDONESIAN OCCUPATIONS DATALIST */}
+      <datalist id="indonesian-professions">
+        <option value="PNS / ASN" />
+        <option value="Karyawan Swasta" />
+        <option value="Wiraswasta" />
+        <option value="Buruh Harian Lepas" />
+        <option value="Petani / Pekebun" />
+        <option value="Nelayan" />
+        <option value="Pedagang" />
+        <option value="Guru / Dosen" />
+        <option value="TNI / POLRI" />
+        <option value="Dokter / Tenaga Medis" />
+        <option value="Ibu Rumah Tangga" />
+        <option value="Pensiunan" />
+        <option value="Buruh Pabrik" />
+        <option value="Sopir / Driver" />
+        <option value="Ojek Online" />
+        <option value="Tidak Bekerja / Menganggur" />
+      </datalist>
     </div>
   );
 }

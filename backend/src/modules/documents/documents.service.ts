@@ -12,6 +12,7 @@ const ALLOWED_MIME_TYPES = new Set([
   'application/pdf',
   'image/jpeg',
   'image/png',
+  'image/webp',
 ]);
 
 /** Map file extensions to expected MIME types for independent validation */
@@ -20,6 +21,7 @@ const EXT_TO_MIME: Record<string, string> = {
   '.jpg': 'image/jpeg',
   '.jpeg': 'image/jpeg',
   '.png': 'image/png',
+  '.webp': 'image/webp',
 };
 
 /** Magic byte signatures for file type detection */
@@ -39,6 +41,14 @@ function detectMimeFromBuffer(buffer: Buffer): string | null {
       const match = sig.bytes.every((byte, i) => buffer[i] === byte);
       if (match) return sig.mime;
     }
+  }
+  // WebP check (RIFF ... WEBP)
+  if (
+    buffer.length >= 12 &&
+    buffer[0] === 0x52 && buffer[1] === 0x49 && buffer[2] === 0x46 && buffer[3] === 0x46 && // "RIFF"
+    buffer[8] === 0x57 && buffer[9] === 0x45 && buffer[10] === 0x42 && buffer[11] === 0x50  // "WEBP"
+  ) {
+    return 'image/webp';
   }
   return null;
 }
@@ -65,6 +75,28 @@ export class DocumentsService {
     return doc;
   }
 
+  async scanUploadedFile(file: Express.Multer.File): Promise<boolean> {
+    // Mock antivirus scan hook. Return true (clean) for now, easily pluggable in the future.
+    return true;
+  }
+
+  private async logUploadFailure(studentId: string, uploadedById: string, reason: string, type: DocumentType) {
+    try {
+      await this.prisma.activityLog.create({
+        data: {
+          id: `LOG_${randomUUID()}`,
+          actorUserId: uploadedById,
+          action: 'DOCUMENT_UPLOAD_FAILED',
+          category: 'DOKUMEN',
+          entityType: 'Document',
+          details: `Gagal mengunggah dokumen tipe ${type} untuk siswa ${studentId}. Rincian: ${reason}`,
+        },
+      });
+    } catch (err: any) {
+      // Prevent logging failures from masking main exception
+    }
+  }
+
   /**
    * Upload a file and create a Document record.
    * Saves file to local uploads/ directory with a UUID-based name.
@@ -83,6 +115,7 @@ export class DocumentsService {
       file.originalname.includes('/') ||
       file.originalname.includes('\\')
     ) {
+      await this.logUploadFailure(studentId, uploadedById, 'Traversal path detected', type);
       throw new BadRequestException(
         'Filename contains invalid path characters or traversal sequences',
       );
@@ -90,6 +123,7 @@ export class DocumentsService {
 
     // Max 10 MB
     if (file.size > 10 * 1024 * 1024) {
+      await this.logUploadFailure(studentId, uploadedById, 'File size exceeds 10 MB limit', type);
       throw new BadRequestException('File size exceeds 10 MB limit');
     }
 
@@ -97,24 +131,34 @@ export class DocumentsService {
     const ext = extname(file.originalname).toLowerCase() || '.bin';
     const expectedMimeFromExt = EXT_TO_MIME[ext];
     if (!expectedMimeFromExt) {
+      await this.logUploadFailure(studentId, uploadedById, `Extension not allowed: ${ext}`, type);
       throw new BadRequestException(
-        `File extension "${ext}" is not allowed. Only PDF, JPG, and PNG files are accepted`,
+        `File extension "${ext}" is not allowed. Only PDF, JPG, PNG, and WEBP files are accepted`,
       );
     }
 
     // 2. Validate magic bytes from file buffer
     const detectedMime = detectMimeFromBuffer(file.buffer);
     if (!detectedMime || !ALLOWED_MIME_TYPES.has(detectedMime)) {
+      await this.logUploadFailure(studentId, uploadedById, 'Magic byte check failed or MIME not allowed', type);
       throw new BadRequestException(
-        'File content does not match an allowed type (PDF, JPG, PNG). File may be corrupted or spoofed.',
+        'File content does not match an allowed type (PDF, JPG, PNG, WEBP). File may be corrupted or spoofed.',
       );
     }
 
     // 3. Cross-check: magic bytes must match file extension
     if (detectedMime !== expectedMimeFromExt) {
+      await this.logUploadFailure(studentId, uploadedById, `Spoofed extension ${ext} vs actual MIME ${detectedMime}`, type);
       throw new BadRequestException(
         `File extension "${ext}" does not match actual file content (${detectedMime}). Possible file spoofing.`,
       );
+    }
+
+    // 4. Antivirus Scan
+    const isClean = await this.scanUploadedFile(file);
+    if (!isClean) {
+      await this.logUploadFailure(studentId, uploadedById, 'Antivirus scan blocked this file', type);
+      throw new BadRequestException('File is blocked by antivirus scan');
     }
 
     const id = randomUUID();
@@ -167,7 +211,7 @@ export class DocumentsService {
           data: {
             id: `LOG_${randomUUID()}`,
             actorUserId: uploadedById,
-            action: 'UPLOAD_DOCUMENT',
+            action: 'DOCUMENT_UPLOAD_SUCCESS',
             category: 'DOKUMEN',
             entityType: 'Document',
             entityId: doc.id,

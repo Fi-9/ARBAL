@@ -305,6 +305,8 @@ enum LogCategory {
 enum RoleName {
   SUPER_ADMIN
   GURU
+  KEPALA_SEKOLAH
+  TATA_USAHA
 }
 
 enum StudentStatus {
@@ -338,3 +340,13 @@ enum JenisKelamin {
   LAKI_LAKI
   PEREMPUAN
 }
+
+model Class {
+  id          String   @id @default(uuid())
+  name        String   @unique
+  isActive    Boolean  @default(true)
+  description String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+

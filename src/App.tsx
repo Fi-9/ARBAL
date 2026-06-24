@@ -54,12 +54,22 @@ import LoginView from './components/LoginView';
 import ViewErrorBoundary from './components/ViewErrorBoundary';
 import BackupRestoreView from './components/BackupRestoreView';
 import { LogOut, Loader2 } from 'lucide-react';
+import { userService } from './services/user.service';
 
-const isViewAllowed = (view: AppView, role: RoleType): boolean => {
-  if (role === 'Super Admin') return true;
-  // Guru / Wali Kelas: can only access dashboard, directory
-  const guruAllowed: AppView[] = ['dashboard', 'directory'];
-  return guruAllowed.includes(view);
+const VIEW_REQUIRED_PERMISSIONS: Record<AppView, string[]> = {
+  dashboard: ['dashboard.view'],
+  directory: ['student.read'],
+  inputForm: ['student.write'],
+  trash: ['student.delete'],
+  accessControl: ['user.manage', 'role.manage'],
+  activityLog: ['logs.view'],
+  backup: ['backup.manage'],
+};
+
+const isViewAllowed = (view: AppView, permissions: string[]): boolean => {
+  const req = VIEW_REQUIRED_PERMISSIONS[view];
+  if (!req) return false;
+  return req.some((p) => permissions.includes(p));
 };
 
 export default function App() {
@@ -68,7 +78,7 @@ export default function App() {
   // ══ ALL HOOKS MUST BE CALLED UNCONDITIONALLY (Rules of Hooks) ══════════
   // Auth: session check + logout
   useSessionQuery();
-  const { accessToken, isLoading, selectedRole, user, setSimulatedRole, actorName } = useAuthStore();
+  const { accessToken, isLoading, selectedRole, user, setSimulatedRole, actorName, permissions } = useAuthStore();
   const logoutMutation = useLogoutMutation();
   const addToast = useToastStore((state) => state.addToast);
 
@@ -76,10 +86,28 @@ export default function App() {
   const { currentView, setCurrentView, editingStudentId, navigateToEdit, navigateToDirectory } = useUIStore();
   const { notifCenterOpen, toggleNotifCenter, setNotifCenterOpen } = useSyncStore();
 
+  // Redirect to dashboard if the current view is not allowed for the active role (prevents leaks/unauthorized view requests)
+  React.useEffect(() => {
+    if (!isLoading && accessToken && !isViewAllowed(currentView, permissions)) {
+      setCurrentView('dashboard');
+    }
+  }, [isLoading, accessToken, permissions, currentView, setCurrentView]);
+
+  // Load role permissions map for Super Admin to enable dynamic simulation access
+  React.useEffect(() => {
+    if (accessToken && user?.role === 'SUPER_ADMIN') {
+      userService.getPermissions()
+        .then((map) => {
+          useAuthStore.getState().setRolePermissionsMap(map);
+        })
+        .catch(() => {});
+    }
+  }, [accessToken, user]);
+
   // React Query: server data
   const studentsQuery = useStudents();
   const students = studentsQuery.data?.data ?? [];
-  const { data: logs = [] } = useActivityLogs();
+  const { data: logs = [], refetch: refetchLogs, isFetching: isFetchingLogs } = useActivityLogs();
   const { data: notifications = [] } = useNotifications();
 
   // Mutation hooks (addLog removed — Phase 2 audit log integrity)
@@ -106,10 +134,7 @@ export default function App() {
       message: `Sessi login browser berganti menjadi ${role}. Sistem menyelaraskan pembatasan enkripsi data.`,
       type: 'info',
     });
-    if (!isViewAllowed(currentView, role)) {
-      setCurrentView('dashboard');
-    }
-  }, [setSimulatedRole, addNotification, currentView, setCurrentView]);
+  }, [setSimulatedRole, addNotification]);
 
 
 
@@ -135,8 +160,18 @@ export default function App() {
     if (isEdit) {
       updateStudent.mutate(savedStudent, {
         onSuccess: async (saved) => {
-          await flush(saved.id);
+          const uploadResult = await flush(saved.id);
           qc.invalidateQueries({ queryKey: queryKeys.students.all() });
+          
+          if (!uploadResult.success) {
+            handleAddNotification(
+              'Penyimpanan Sebagian',
+              `Profil ${saved.nama} berhasil diperbarui, tetapi ${uploadResult.failedCount} dokumen gagal diunggah. Silakan periksa kembali berkas yang ditandai merah.`,
+              'warning'
+            );
+            return;
+          }
+
           handleAddNotification(
             'Profil Diperbarui',
             `Data siswa ${saved.nama} berhasil disimpan ke sistem arsip pusat ARBAL.`,
@@ -156,8 +191,22 @@ export default function App() {
     } else {
       createStudent.mutate(savedStudent, {
         onSuccess: async (created) => {
-          await flush(created.id);
+          const uploadResult = await flush(created.id);
           qc.invalidateQueries({ queryKey: queryKeys.students.all() });
+
+          if (!uploadResult.success) {
+            // Transition form to edit mode for the newly created student
+            useUIStore.getState().setEditingStudentId(created.id);
+            // Refresh form fields in store so it knows it is loaded from editing student
+            useStudentFormStore.getState().setField('loadedStudentId', created.id);
+            handleAddNotification(
+              'Penyimpanan Sebagian',
+              `Siswa ${created.nama} berhasil terdaftar, tetapi ${uploadResult.failedCount} dokumen gagal diunggah. Silakan periksa kembali berkas yang ditandai merah.`,
+              'warning'
+            );
+            return;
+          }
+
           handleAddNotification(
             'Siswa Terdaftar',
             `Data siswa ${created.nama} berhasil disimpan ke sistem arsip pusat ARBAL.`,
@@ -202,7 +251,7 @@ export default function App() {
           navigateToDirectory();
           setCurrentView(view);
         }}
-        selectedRole={selectedRole}
+        permissions={permissions}
       />
 
       {/* 2. Main Workstage Area */}
@@ -247,6 +296,8 @@ export default function App() {
                 >
                   <option value="Super Admin">🛡️ Admin</option>
                   <option value="Guru / Wali Kelas">👨‍🏫 Guru</option>
+                  <option value="Kepala Sekolah">💼 Kepsek</option>
+                  <option value="Tata Usaha">📝 TU</option>
                 </select>
               </div>
             )}
@@ -330,6 +381,8 @@ export default function App() {
             <ViewErrorBoundary viewName="Log Aktivitas">
               <ActivityLogView
                 logs={logs}
+                onRefresh={refetchLogs}
+                isRefreshing={isFetchingLogs}
               />
             </ViewErrorBoundary>
           )}

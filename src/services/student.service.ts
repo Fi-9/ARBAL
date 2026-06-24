@@ -370,6 +370,41 @@ export const studentService = {
     return data;
   },
 
+  updateAcademicYear: async (id: string, data: { name?: string; isActive?: boolean }): Promise<any> => {
+    const { data: res } = await api.put<any>(`/students/academic-years/${id}`, data);
+    return res;
+  },
+
+  deleteAcademicYear: async (id: string): Promise<any> => {
+    const { data: res } = await api.delete<any>(`/students/academic-years/${id}`);
+    return res;
+  },
+
+  setActiveAcademicYear: async (id: string): Promise<any> => {
+    const { data: res } = await api.post<any>(`/students/academic-years/${id}/active`);
+    return res;
+  },
+
+  getClasses: async (): Promise<{ id: string; name: string; isActive: boolean; description?: string }[]> => {
+    const { data } = await api.get<any[]>('/students/classes');
+    return data ?? [];
+  },
+
+  createClass: async (name: string, description?: string): Promise<any> => {
+    const { data } = await api.post<any>('/students/classes', { name, description });
+    return data;
+  },
+
+  updateClass: async (id: string, data: { name?: string; description?: string; isActive?: boolean }): Promise<any> => {
+    const { data: res } = await api.put<any>(`/students/classes/${id}`, data);
+    return res;
+  },
+
+  deleteClass: async (id: string): Promise<any> => {
+    const { data: res } = await api.delete<any>(`/students/classes/${id}`);
+    return res;
+  },
+
   getTimeline: async (id: string): Promise<any[]> => {
     const { data } = await api.get<any[]>(`/students/${id}/timeline`);
     return data ?? [];

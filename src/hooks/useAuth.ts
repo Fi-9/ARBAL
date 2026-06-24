@@ -13,6 +13,7 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { authService } from '../services/auth.service';
 import { useAuthStore } from '../stores/auth.store';
+import { useUIStore } from '../stores/ui.store';
 import { queryKeys } from '../lib/queryKeys';
 
 // ---------------------------------------------------------------------------
@@ -57,6 +58,7 @@ export function useLoginMutation() {
       authService.login(email, password),
     onSuccess: (data) => {
       setSession(data.accessToken, data.user);
+      useUIStore.getState().reset(); // Clear old UI state on successful login
       // Invalidate session query so the app recognizes logged-in state
       qc.setQueryData(queryKeys.auth.session(), data);
     },
@@ -75,6 +77,7 @@ export function useLogoutMutation() {
     mutationFn: authService.logout,
     onSettled: () => {
       clearSession();
+      useUIStore.getState().reset(); // Clear UI state on logout
       qc.clear(); // Clear all cached data on logout
     },
   });

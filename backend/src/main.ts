@@ -1,6 +1,7 @@
 import { config } from 'dotenv';
 // Load root .env from parent directory
-import { resolve } from 'path';
+import { resolve, join } from 'path';
+import { existsSync, mkdirSync, writeFileSync, unlinkSync } from 'fs';
 config({ path: resolve(__dirname, '../../.env') });
 
 import { NestFactory } from '@nestjs/core';
@@ -33,11 +34,50 @@ async function bootstrap() {
     );
   }
 
+  // Verify UPLOADS_DIR and BACKUPS_DIR exist and are writable
+  const uploadsDir = process.env.UPLOADS_DIR
+    ? resolve(process.env.UPLOADS_DIR)
+    : resolve(__dirname, '..', 'uploads');
+
+  const backupsDir = process.env.BACKUPS_DIR
+    ? resolve(process.env.BACKUPS_DIR)
+    : resolve(__dirname, '..', 'backups');
+
+  const verifyWritability = (dirPath: string, label: string) => {
+    try {
+      if (!existsSync(dirPath)) {
+        mkdirSync(dirPath, { recursive: true });
+      }
+      const testFile = join(dirPath, `.startup-write-test-${Date.now()}`);
+      writeFileSync(testFile, 'test');
+      unlinkSync(testFile);
+    } catch (err: any) {
+      console.error(`FATAL: Directory ${label} at "${dirPath}" is not writable:`, err.message);
+      process.exit(1);
+    }
+  };
+
+  verifyWritability(uploadsDir, 'UPLOADS_DIR');
+  verifyWritability(backupsDir, 'BACKUPS_DIR');
+
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
 
   // Ensure SYSTEM user exists for audit logging of system events
   const prisma = app.get(PrismaService);
   try {
+    // Ensure all standard roles exist in database
+    const rolesToEnsure = ['SUPER_ADMIN', 'GURU', 'KEPALA_SEKOLAH', 'TATA_USAHA'];
+    for (const rName of rolesToEnsure) {
+      await prisma.role.upsert({
+        where: { name: rName as any },
+        update: {},
+        create: {
+          id: `role-${rName.toLowerCase().replace(/_/g, '-')}`,
+          name: rName as any,
+        },
+      });
+    }
+
     const systemUser = await prisma.user.findUnique({ where: { id: 'SYSTEM' } });
     if (!systemUser) {
       let role = await prisma.role.findFirst({ where: { name: 'SUPER_ADMIN' } });
@@ -61,6 +101,34 @@ async function bootstrap() {
   } catch (err: any) {
     console.error('Failed to verify/create SYSTEM user:', err.message);
   }
+
+  // Seed default classes if table is empty
+  try {
+    const classCount = await prisma.class.count();
+    if (classCount === 0) {
+      const defaultClasses = [
+        { name: 'Kelas X', description: 'Kelas X PKBM Mustaqbal' },
+        { name: 'Kelas XI', description: 'Kelas XI PKBM Mustaqbal' },
+        { name: 'Kelas XII', description: 'Kelas XII PKBM Mustaqbal' },
+        { name: 'Paket A', description: 'Program Kesetaraan Paket A (SD)' },
+        { name: 'Paket B', description: 'Program Kesetaraan Paket B (SMP)' },
+        { name: 'Paket C', description: 'Program Kesetaraan Paket C (SMA)' },
+        { name: 'Alumni', description: 'Siswa yang telah menyelesaikan studi' },
+      ];
+      await prisma.class.createMany({
+        data: defaultClasses,
+      });
+      console.log('🌱 Seeded default classes.');
+    }
+  } catch (err: any) {
+    console.error('Failed to seed default classes:', err.message);
+  }
+
+  // Print Backup Scheduler Configuration
+  console.log('⏰ Backup Scheduler Initialized:');
+  console.log('   - Harian: Pukul 01:00 WIB');
+  console.log('   - Mingguan: Pukul 02:00 WIB');
+  console.log('   - Bulanan: Pukul 03:00 WIB');
 
   // Security
   app.use(helmet());

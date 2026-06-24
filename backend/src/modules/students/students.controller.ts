@@ -41,13 +41,13 @@ export class StudentsController {
   @Post('academic-years')
   @Permissions('student.write')
   @ApiOperation({ summary: 'Create a new academic year' })
-  async createAcademicYear(@Body('name') body: { name: string }) {
+  async createAcademicYear(@Body('name') body: { name: string }, @Req() req: AuthedRequest) {
     // Support both raw string body or JSON object body for robustness
     const name = typeof body === 'object' && body !== null ? body.name : body;
     if (!name || typeof name !== 'string') {
       throw new BadRequestException('Academic year name is required as a string');
     }
-    return this.studentsService.createAcademicYear(name.trim());
+    return this.studentsService.createAcademicYear(name.trim(), req.user);
   }
 
   @Put('academic-years/:id')
@@ -56,22 +56,61 @@ export class StudentsController {
   async updateAcademicYear(
     @Param('id') id: string,
     @Body() body: { name?: string; isActive?: boolean },
+    @Req() req: AuthedRequest,
   ) {
-    return this.studentsService.updateAcademicYear(id, body);
+    return this.studentsService.updateAcademicYear(id, body, req.user);
   }
 
   @Delete('academic-years/:id')
   @Permissions('student.write')
   @ApiOperation({ summary: 'Delete an academic year' })
-  async deleteAcademicYear(@Param('id') id: string) {
-    return this.studentsService.deleteAcademicYear(id);
+  async deleteAcademicYear(@Param('id') id: string, @Req() req: AuthedRequest) {
+    return this.studentsService.deleteAcademicYear(id, req.user);
   }
 
   @Post('academic-years/:id/active')
   @Permissions('student.write')
   @ApiOperation({ summary: 'Set an academic year as active' })
-  async setActiveAcademicYear(@Param('id') id: string) {
-    return this.studentsService.setActiveAcademicYear(id);
+  async setActiveAcademicYear(@Param('id') id: string, @Req() req: AuthedRequest) {
+    return this.studentsService.setActiveAcademicYear(id, req.user);
+  }
+
+  @Get('classes')
+  @Permissions('student.read')
+  @ApiOperation({ summary: 'Get all classes' })
+  async findClasses() {
+    return this.studentsService.findClasses();
+  }
+
+  @Post('classes')
+  @Permissions('student.write')
+  @ApiOperation({ summary: 'Create a new class' })
+  async createClass(
+    @Body() body: { name: string; description?: string },
+    @Req() req: AuthedRequest,
+  ) {
+    if (!body.name || typeof body.name !== 'string') {
+      throw new BadRequestException('Class name is required as a string');
+    }
+    return this.studentsService.createClass(body.name.trim(), body.description, req.user);
+  }
+
+  @Put('classes/:id')
+  @Permissions('student.write')
+  @ApiOperation({ summary: 'Update a class' })
+  async updateClass(
+    @Param('id') id: string,
+    @Body() body: { name?: string; description?: string; isActive?: boolean },
+    @Req() req: AuthedRequest,
+  ) {
+    return this.studentsService.updateClass(id, body, req.user);
+  }
+
+  @Delete('classes/:id')
+  @Permissions('student.write')
+  @ApiOperation({ summary: 'Delete a class' })
+  async deleteClass(@Param('id') id: string, @Req() req: AuthedRequest) {
+    return this.studentsService.deleteClass(id, req.user);
   }
 
   /** GET /api/v1/students/search?q=... — Global Search */

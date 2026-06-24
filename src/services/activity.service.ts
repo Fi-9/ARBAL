@@ -34,11 +34,22 @@ const DB_ROLE_MAP: Record<string, RoleType> = {
 };
 
 function mapBackendLog(raw: any): ActivityLog {
-  const createdAt = typeof raw.createdAt === 'string'
-    ? raw.createdAt
-    : new Date(raw.createdAt).toISOString();
-  // Format: "YYYY-MM-DD HH:mm"
-  const timestamp = createdAt.replace('T', ' ').substring(0, 16);
+  let timestamp = '';
+  try {
+    const d = new Date(raw.createdAt);
+    if (!isNaN(d.getTime())) {
+      const year = d.getFullYear();
+      const month = String(d.getMonth() + 1).padStart(2, '0');
+      const day = String(d.getDate()).padStart(2, '0');
+      const hours = String(d.getHours()).padStart(2, '0');
+      const minutes = String(d.getMinutes()).padStart(2, '0');
+      timestamp = `${year}-${month}-${day} ${hours}:${minutes}`;
+    } else {
+      timestamp = String(raw.createdAt).replace('T', ' ').substring(0, 16);
+    }
+  } catch {
+    timestamp = String(raw.createdAt).replace('T', ' ').substring(0, 16);
+  }
 
   // Resolve actor role: backend returns raw.actorRole (from User.Role.name)
   // or raw.User?.Role?.name — map DB enum to frontend label
@@ -94,9 +105,17 @@ export const notificationService = {
     message: string,
     type: SystemNotification['type'],
   ): Promise<SystemNotification> => {
+    const d = new Date();
+    const year = d.getFullYear();
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    const hours = String(d.getHours()).padStart(2, '0');
+    const minutes = String(d.getMinutes()).padStart(2, '0');
+    const timestamp = `${year}-${month}-${day} ${hours}:${minutes}`;
+
     const notif: SystemNotification = {
       id: `NOTIF_${Date.now()}`,
-      timestamp: new Date().toISOString().replace('T', ' ').substring(0, 16),
+      timestamp,
       title,
       message,
       type,

@@ -63,6 +63,7 @@ export async function uploadDocument(
   file: File,
   studentId: string,
   docTypeOrKey: DocumentType | string,
+  onUploadProgress?: (progressEvent: any) => void,
 ): Promise<UploadedDocument> {
   // Resolve the backend enum value
   const backendType = DOC_KEY_MAP[docTypeOrKey] ?? DOC_TYPE_MAP[docTypeOrKey as DocumentType] ?? docTypeOrKey;
@@ -75,6 +76,7 @@ export async function uploadDocument(
   const { data } = await api.post<UploadedDocument>('/documents/upload', formData, {
     headers: { 'Content-Type': 'multipart/form-data' },
     timeout: 30_000, // 30s for file uploads
+    onUploadProgress,
   });
 
   return data;

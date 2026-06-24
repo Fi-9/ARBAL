@@ -45,22 +45,28 @@ import type { UserAccount } from '../types';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-type DbRole = 'SUPER_ADMIN' | 'GURU';
+type DbRole = 'SUPER_ADMIN' | 'GURU' | 'KEPALA_SEKOLAH' | 'TATA_USAHA';
 type TabId = 'list' | 'create' | 'detail';
 
 const ROLE_OPTIONS: Array<{ value: DbRole; label: string }> = [
   { value: 'SUPER_ADMIN', label: 'Super Admin' },
   { value: 'GURU', label: 'Guru / Wali Kelas' },
+  { value: 'KEPALA_SEKOLAH', label: 'Kepala Sekolah' },
+  { value: 'TATA_USAHA', label: 'Tata Usaha' },
 ];
 
 const ROLE_COLORS: Record<string, string> = {
   SUPER_ADMIN: 'bg-violet-500',
   GURU: 'bg-amber-500',
+  KEPALA_SEKOLAH: 'bg-emerald-500',
+  TATA_USAHA: 'bg-blue-500',
 };
 
 const ROLE_BADGE_COLORS: Record<string, string> = {
   SUPER_ADMIN: 'bg-violet-100 text-violet-700 border-violet-200',
   GURU: 'bg-amber-100 text-amber-700 border-amber-200',
+  KEPALA_SEKOLAH: 'bg-emerald-100 text-emerald-700 border-emerald-200',
+  TATA_USAHA: 'bg-blue-100 text-blue-700 border-blue-200',
 };
 
 function getInitials(name: string): string {

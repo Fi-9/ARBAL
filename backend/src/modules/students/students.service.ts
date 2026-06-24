@@ -205,6 +205,20 @@ export class StudentsService {
     actor: Actor,
   ) {
     return this.prisma.$transaction(async (tx) => {
+      // Validate Class
+      if (data.kelas) {
+        const trimmedKelas = data.kelas.trim();
+        const activeClass = await tx.class.findFirst({
+          where: {
+            name: { equals: trimmedKelas, mode: 'insensitive' },
+            isActive: true,
+          },
+        });
+        if (!activeClass) {
+          throw new BadRequestException(`Kelas "${trimmedKelas}" tidak valid atau tidak aktif.`);
+        }
+      }
+
       // 1. Resolve AcademicYear — use provided or fall back to active year
       let academicYearId = data.academicYearId;
       if (!academicYearId) {
@@ -369,6 +383,20 @@ export class StudentsService {
         createdAt,
         ...studentFields
       } = data as any;
+
+      // Validate Class
+      if (studentFields.kelas !== undefined && studentFields.kelas !== null) {
+        const trimmedKelas = studentFields.kelas.trim();
+        const activeClass = await tx.class.findFirst({
+          where: {
+            name: { equals: trimmedKelas, mode: 'insensitive' },
+            isActive: true,
+          },
+        });
+        if (!activeClass) {
+          throw new BadRequestException(`Kelas "${trimmedKelas}" tidak valid atau tidak aktif.`);
+        }
+      }
 
       // Prepare student updates
       const studentUpdateData: Record<string, any> = {};
@@ -652,25 +680,42 @@ export class StudentsService {
     });
   }
 
-  async createAcademicYear(name: string) {
+  async createAcademicYear(name: string, actor: Actor) {
+    const trimmedName = name.trim();
     const existing = await this.prisma.academicYear.findUnique({
-      where: { name },
+      where: { name: trimmedName },
     });
     if (existing) {
-      throw new BadRequestException('Academic year already exists');
+      throw new BadRequestException('Tahun Ajaran sudah ada');
     }
-    return this.prisma.academicYear.create({
-      data: {
-        name,
-        isActive: false,
-      },
+    return this.prisma.$transaction(async (tx) => {
+      const year = await tx.academicYear.create({
+        data: {
+          name: trimmedName,
+          isActive: false,
+        },
+      });
+
+      await tx.activityLog.create({
+        data: {
+          id: `LOG_${randomUUID()}`,
+          actorUserId: actor.id,
+          action: 'ACADEMIC_YEAR_CREATED',
+          category: 'SISWA',
+          entityType: 'AcademicYear',
+          entityId: year.id,
+          details: `Tahun Ajaran baru "${year.name}" dibuat oleh ${actor.name} (ID: ${actor.id})`,
+        },
+      });
+
+      return year;
     });
   }
 
-  async updateAcademicYear(id: string, data: { name?: string; isActive?: boolean }) {
+  async updateAcademicYear(id: string, data: { name?: string; isActive?: boolean }, actor: Actor) {
     const existing = await this.prisma.academicYear.findUnique({ where: { id } });
     if (!existing) {
-      throw new NotFoundException('Academic year not found');
+      throw new NotFoundException('Tahun Ajaran tidak ditemukan');
     }
 
     if (data.name) {
@@ -679,35 +724,67 @@ export class StudentsService {
         where: { name, NOT: { id } },
       });
       if (duplicate) {
-        throw new BadRequestException('Academic year with this name already exists');
+        throw new BadRequestException('Tahun Ajaran dengan nama tersebut sudah ada');
       }
-      return this.prisma.academicYear.update({
-        where: { id },
-        data: { name },
+      return this.prisma.$transaction(async (tx) => {
+        const year = await tx.academicYear.update({
+          where: { id },
+          data: { name },
+        });
+
+        await tx.activityLog.create({
+          data: {
+            id: `LOG_${randomUUID()}`,
+            actorUserId: actor.id,
+            action: 'ACADEMIC_YEAR_UPDATED',
+            category: 'SISWA',
+            entityType: 'AcademicYear',
+            entityId: year.id,
+            details: `Tahun Ajaran "${existing.name}" diubah nama menjadi "${year.name}" oleh ${actor.name} (ID: ${actor.id})`,
+          },
+        });
+
+        return year;
       });
     }
 
     if (data.isActive !== undefined) {
       if (data.isActive) {
-        return this.setActiveAcademicYear(id);
+        return this.setActiveAcademicYear(id, actor);
       } else {
         // Enforce that we cannot deactivate the only active year
         if (existing.isActive) {
           throw new BadRequestException('Harus ada minimal satu Tahun Ajaran yang aktif. Aktifkan Tahun Ajaran lainnya terlebih dahulu.');
         }
-        return this.prisma.academicYear.update({
-          where: { id },
-          data: { isActive: false },
+        return this.prisma.$transaction(async (tx) => {
+          const year = await tx.academicYear.update({
+            where: { id },
+            data: { isActive: false },
+          });
+
+          await tx.activityLog.create({
+            data: {
+              id: `LOG_${randomUUID()}`,
+              actorUserId: actor.id,
+              action: 'ACADEMIC_YEAR_UPDATED',
+              category: 'SISWA',
+              entityType: 'AcademicYear',
+              entityId: year.id,
+              details: `Tahun Ajaran "${year.name}" dinonaktifkan oleh ${actor.name} (ID: ${actor.id})`,
+            },
+          });
+
+          return year;
         });
       }
     }
     return existing;
   }
 
-  async setActiveAcademicYear(id: string) {
+  async setActiveAcademicYear(id: string, actor: Actor) {
     const existing = await this.prisma.academicYear.findUnique({ where: { id } });
     if (!existing) {
-      throw new NotFoundException('Academic year not found');
+      throw new NotFoundException('Tahun Ajaran tidak ditemukan');
     }
 
     return this.prisma.$transaction(async (tx) => {
@@ -718,17 +795,31 @@ export class StudentsService {
       });
 
       // Set target active year to true
-      return tx.academicYear.update({
+      const year = await tx.academicYear.update({
         where: { id },
         data: { isActive: true },
       });
+
+      await tx.activityLog.create({
+        data: {
+          id: `LOG_${randomUUID()}`,
+          actorUserId: actor.id,
+          action: 'ACADEMIC_YEAR_ACTIVATED',
+          category: 'SISWA',
+          entityType: 'AcademicYear',
+          entityId: year.id,
+          details: `Tahun Ajaran "${year.name}" diaktifkan oleh ${actor.name} (ID: ${actor.id})`,
+        },
+      });
+
+      return year;
     });
   }
 
-  async deleteAcademicYear(id: string) {
+  async deleteAcademicYear(id: string, actor: Actor) {
     const existing = await this.prisma.academicYear.findUnique({ where: { id } });
     if (!existing) {
-      throw new NotFoundException('Academic year not found');
+      throw new NotFoundException('Tahun Ajaran tidak ditemukan');
     }
 
     // Check if there are any students in this academic year
@@ -741,21 +832,172 @@ export class StudentsService {
       );
     }
 
-    // If we delete the active year, ensure we set another one active if exists
-    if (existing.isActive) {
-      const another = await this.prisma.academicYear.findFirst({
-        where: { NOT: { id } },
-      });
-      if (another) {
-        await this.prisma.academicYear.update({
-          where: { id: another.id },
-          data: { isActive: true },
+    return this.prisma.$transaction(async (tx) => {
+      // If we delete the active year, ensure we set another one active if exists
+      if (existing.isActive) {
+        const another = await tx.academicYear.findFirst({
+          where: { NOT: { id } },
         });
+        if (another) {
+          await tx.academicYear.update({
+            where: { id: another.id },
+            data: { isActive: true },
+          });
+
+          await tx.activityLog.create({
+            data: {
+              id: `LOG_${randomUUID()}`,
+              actorUserId: actor.id,
+              action: 'ACADEMIC_YEAR_ACTIVATED',
+              category: 'SISWA',
+              entityType: 'AcademicYear',
+              entityId: another.id,
+              details: `Tahun Ajaran "${another.name}" diaktifkan secara otomatis setelah penghapusan Tahun Ajaran aktif sebelumnya oleh ${actor.name} (ID: ${actor.id})`,
+            },
+          });
+        }
+      }
+
+      const deletedYear = await tx.academicYear.delete({ where: { id } });
+
+      await tx.activityLog.create({
+        data: {
+          id: `LOG_${randomUUID()}`,
+          actorUserId: actor.id,
+          action: 'ACADEMIC_YEAR_DELETED',
+          category: 'SISWA',
+          entityType: 'AcademicYear',
+          entityId: id,
+          details: `Tahun Ajaran "${existing.name}" dihapus oleh ${actor.name} (ID: ${actor.id})`,
+        },
+      });
+
+      return deletedYear;
+    });
+  }
+
+  async findClasses() {
+    return this.prisma.class.findMany({
+      orderBy: { name: 'asc' },
+    });
+  }
+
+  async createClass(name: string, description: string | undefined, actor: Actor) {
+    const trimmedName = name.trim();
+    const existing = await this.prisma.class.findFirst({
+      where: { name: { equals: trimmedName, mode: 'insensitive' } },
+    });
+    if (existing) {
+      throw new BadRequestException('Kelas dengan nama tersebut sudah ada');
+    }
+
+    return this.prisma.$transaction(async (tx) => {
+      const newClass = await tx.class.create({
+        data: {
+          name: trimmedName,
+          description,
+          isActive: true,
+        },
+      });
+
+      await tx.activityLog.create({
+        data: {
+          id: `LOG_${randomUUID()}`,
+          actorUserId: actor.id,
+          action: 'CLASS_CREATED',
+          category: 'SISWA',
+          entityType: 'Class',
+          entityId: newClass.id,
+          details: `Master Kelas "${newClass.name}" dibuat oleh ${actor.name} (ID: ${actor.id})`,
+        },
+      });
+
+      return newClass;
+    });
+  }
+
+  async updateClass(id: string, data: { name?: string; description?: string; isActive?: boolean }, actor: Actor) {
+    const existing = await this.prisma.class.findUnique({ where: { id } });
+    if (!existing) {
+      throw new NotFoundException('Kelas tidak ditemukan');
+    }
+
+    const trimmedName = data.name?.trim();
+    if (trimmedName) {
+      const duplicate = await this.prisma.class.findFirst({
+        where: {
+          name: { equals: trimmedName, mode: 'insensitive' },
+          NOT: { id },
+        },
+      });
+      if (duplicate) {
+        throw new BadRequestException('Kelas dengan nama tersebut sudah ada');
       }
     }
 
-    return this.prisma.academicYear.delete({ where: { id } });
+    return this.prisma.$transaction(async (tx) => {
+      const updatedClass = await tx.class.update({
+        where: { id },
+        data: {
+          name: trimmedName,
+          description: data.description,
+          isActive: data.isActive,
+        },
+      });
+
+      // If class name changed, update all student's "kelas" field with transaction safety
+      if (trimmedName && trimmedName !== existing.name) {
+        await tx.student.updateMany({
+          where: { kelas: existing.name },
+          data: { kelas: trimmedName },
+        });
+      }
+
+      await tx.activityLog.create({
+        data: {
+          id: `LOG_${randomUUID()}`,
+          actorUserId: actor.id,
+          action: 'CLASS_UPDATED',
+          category: 'SISWA',
+          entityType: 'Class',
+          entityId: updatedClass.id,
+          details: `Master Kelas "${existing.name}" diperbarui menjadi "${updatedClass.name}" (isActive: ${updatedClass.isActive}) oleh ${actor.name} (ID: ${actor.id})`,
+        },
+      });
+
+      return updatedClass;
+    });
   }
+
+  async deleteClass(id: string, actor: Actor) {
+    const existing = await this.prisma.class.findUnique({ where: { id } });
+    if (!existing) {
+      throw new NotFoundException('Kelas tidak ditemukan');
+    }
+
+    // Soft Delete Kelas
+    return this.prisma.$transaction(async (tx) => {
+      const updatedClass = await tx.class.update({
+        where: { id },
+        data: { isActive: false },
+      });
+
+      await tx.activityLog.create({
+        data: {
+          id: `LOG_${randomUUID()}`,
+          actorUserId: actor.id,
+          action: 'CLASS_DELETED',
+          category: 'SISWA',
+          entityType: 'Class',
+          entityId: updatedClass.id,
+          details: `Master Kelas "${existing.name}" dinonaktifkan (Soft Delete) oleh ${actor.name} (ID: ${actor.id})`,
+        },
+      });
+
+      return updatedClass;
+    });
+  }
+
 
   /**
    * Trash Bin — Liste tous les étudiants soft-deleted
@@ -786,7 +1028,8 @@ export class StudentsService {
     if (!student.deletedAt) throw new BadRequestException('Student is not deleted');
 
     return this.prisma.$transaction(async (tx) => {
-      const restored = await tx.student.update({
+      // Use updateMany to bypass the internal findUnique check which fails for soft-deleted records
+      await tx.student.updateMany({
         where: { id },
         data: {
           deletedAt: null,
@@ -794,7 +1037,16 @@ export class StudentsService {
           status: 'AKTIF',
           updatedAt: new Date(),
         },
+        // @ts-expect-error - bypass soft-delete middleware filter
+        __includeDeleted: true,
       });
+
+      const restored = await tx.student.findUnique({
+        where: { id },
+        // @ts-expect-error - bypass soft-delete middleware filter
+        __includeDeleted: true,
+      });
+      if (!restored) throw new NotFoundException('Restored student not found');
 
       // Restore guardian — use raw SQL to bypass soft-delete middleware
       await tx.$executeRawUnsafe(
@@ -853,14 +1105,23 @@ export class StudentsService {
 
     // Database transaction — delete records
     const result = await this.prisma.$transaction(async (tx) => {
-      // Delete documents in DB
-      await tx.document.deleteMany({ where: { studentId: id } });
+      // Delete documents in DB — bypass soft-delete filter by using raw SQL
+      await tx.$executeRawUnsafe(
+        `DELETE FROM "Document" WHERE "studentId" = $1`,
+        id,
+      );
 
-      // Delete guardian
-      await tx.guardian.deleteMany({ where: { studentId: id } });
+      // Delete guardian — bypass soft-delete filter by using raw SQL
+      await tx.$executeRawUnsafe(
+        `DELETE FROM "Guardian" WHERE "studentId" = $1`,
+        id,
+      );
 
-      // Delete student
-      await tx.student.delete({ where: { id } });
+      // Delete student — bypass soft-delete filter by using raw SQL
+      await tx.$executeRawUnsafe(
+        `DELETE FROM "Student" WHERE "id" = $1`,
+        id,
+      );
 
       await tx.activityLog.create({
         data: {

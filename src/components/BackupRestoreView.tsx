@@ -380,16 +380,16 @@ export default function BackupRestoreView() {
 
       {/* Premium Custom Delete Confirmation Modal */}
       {isConfirmOpen && (
-        <div id="delete-backup-confirm-modal" className="fixed inset-0 z-[100] bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 animate-fade-in">
+        <div id="delete-backup-confirm-modal" className="fixed inset-0 z-[100] bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 UAT-modal animate-fade-in">
           <div className="bg-white rounded-2xl w-full max-w-md overflow-hidden text-slate-800 border border-slate-200 shadow-2xl flex flex-col">
             <div className="bg-slate-50 p-5 border-b border-slate-100 flex items-center justify-between">
-              <div className="flex items-center space-x-2 text-rose-650 font-bold text-sm">
+              <div className="flex items-center space-x-2 text-rose-700 font-bold text-sm">
                 <AlertTriangle size={18} className="text-rose-500 shrink-0" />
                 <span>Konfirmasi Hapus Cadangan</span>
               </div>
               <button 
                 onClick={() => { setIsConfirmOpen(false); setBackupToDelete(null); }} 
-                className="text-slate-400 hover:text-slate-650 hover:bg-slate-100 p-1.5 rounded-lg transition"
+                className="text-slate-400 hover:text-slate-700 hover:bg-slate-100 p-1.5 rounded-lg transition"
               >
                 <X size={16} />
               </button>
@@ -406,14 +406,14 @@ export default function BackupRestoreView() {
             <div className="bg-slate-50 p-4 border-t border-slate-100 flex justify-end gap-2.5 text-xs font-bold">
               <button
                 onClick={() => { setIsConfirmOpen(false); setBackupToDelete(null); }}
-                className="px-4.5 py-2.5 bg-slate-200 hover:bg-slate-350 text-slate-750 rounded-xl transition cursor-pointer"
+                className="px-4.5 py-2.5 bg-slate-200 hover:bg-slate-300 text-slate-800 rounded-xl transition cursor-pointer"
               >
                 Batal
               </button>
               <button
                 onClick={handleConfirmDelete}
                 disabled={deleteBackupMutation.isPending}
-                className="px-4.5 py-2.5 bg-rose-650 hover:bg-rose-600 disabled:opacity-50 text-white rounded-xl transition shadow-sm hover:shadow-md cursor-pointer flex items-center space-x-1.5"
+                className="px-4.5 py-2.5 bg-rose-600 hover:bg-rose-700 disabled:opacity-50 text-white rounded-xl transition shadow-sm hover:shadow-md cursor-pointer flex items-center space-x-1.5"
               >
                 {deleteBackupMutation.isPending && <Loader2 size={13} className="animate-spin" />}
                 <span>Hapus Permanen</span>
