@@ -2391,8 +2391,8 @@ export default function StudentFormView({
                                 if (window.confirm(`Apakah Anda yakin ingin menghapus kelas "${cls.name}"?`)) {
                                   try {
                                     await studentService.deleteClass(cls.id);
-                                    setClasses((prev) => prev.map((c) => (c.id === cls.id ? { ...c, isActive: false } : c)));
-                                    addToast('Kelas berhasil dihapus (nonaktif)!', 'success');
+                                    setClasses((prev) => prev.filter((c) => c.id !== cls.id));
+                                    addToast('Kelas berhasil dihapus!', 'success');
                                   } catch (err: any) {
                                     addToast(`Gagal menghapus kelas: ${getFriendlyErrorMessage(err)}`, 'error');
                                   }

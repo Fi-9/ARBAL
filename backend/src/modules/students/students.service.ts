@@ -975,11 +975,17 @@ export class StudentsService {
       throw new NotFoundException('Kelas tidak ditemukan');
     }
 
-    // Soft Delete Kelas
     return this.prisma.$transaction(async (tx) => {
-      const updatedClass = await tx.class.update({
+      // Pastikan tidak ada siswa aktif yang masih menggunakan kelas ini
+      const studentCount = await tx.student.count({
+        where: { kelas: existing.name, deletedAt: null },
+      });
+      if (studentCount > 0) {
+        throw new BadRequestException(`Tidak dapat menghapus kelas "${existing.name}" karena masih memiliki ${studentCount} siswa aktif.`);
+      }
+
+      await tx.class.delete({
         where: { id },
-        data: { isActive: false },
       });
 
       await tx.activityLog.create({
@@ -989,12 +995,12 @@ export class StudentsService {
           action: 'CLASS_DELETED',
           category: 'SISWA',
           entityType: 'Class',
-          entityId: updatedClass.id,
-          details: `Master Kelas "${existing.name}" dinonaktifkan (Soft Delete) oleh ${actor.name} (ID: ${actor.id})`,
+          entityId: existing.id,
+          details: `Master Kelas "${existing.name}" dihapus permanen oleh ${actor.name} (ID: ${actor.id})`,
         },
       });
 
-      return updatedClass;
+      return existing;
     });
   }
 
