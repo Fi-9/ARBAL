@@ -757,7 +757,7 @@ Gunakan utilitas CLI pg_restore/psql untuk memulihkan database.sql, dan salin/ek
     }
 
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-    const fileName = `arbal-backup-uploaded-${timestamp}.zip`;
+    const fileName = `arbal-backup-manual-${timestamp}.zip`;
     const filePath = resolve(BACKUPS_DIR, fileName);
     ensureInsideDirectory(BACKUPS_DIR, filePath);
 
