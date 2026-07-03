@@ -4,7 +4,7 @@ import { Cron } from '@nestjs/schedule';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { ZipArchive } from 'archiver';
-import { createWriteStream, existsSync, mkdirSync, readdirSync, statSync, unlinkSync, writeFileSync } from 'fs';
+import { createWriteStream, existsSync, mkdirSync, readdirSync, statSync, unlinkSync, writeFileSync, readFileSync } from 'fs';
 import { basename, isAbsolute, relative, resolve } from 'path';
 
 const execFileAsync = promisify(execFile);
@@ -107,6 +107,53 @@ function findPsqlOnWindows(): string | null {
     }
   }
   return null;
+}
+
+function splitSqlStatements(sql: string): string[] {
+  const statements: string[] = [];
+  let current = '';
+  let inString = false;
+  let escape = false;
+
+  for (let i = 0; i < sql.length; i++) {
+    const char = sql[i];
+
+    if (inString) {
+      current += char;
+      if (escape) {
+        escape = false;
+      } else if (char === '\\') {
+        escape = true;
+      } else if (char === "'") {
+        if (sql[i + 1] === "'") {
+          current += "'";
+          i++;
+        } else {
+          inString = false;
+        }
+      }
+    } else {
+      if (char === "'") {
+        inString = true;
+        current += char;
+      } else if (char === ';') {
+        const stmt = current.trim();
+        if (stmt) {
+          statements.push(stmt);
+        }
+        current = '';
+      } else {
+        current += char;
+      }
+    }
+  }
+
+  const finalStmt = current.trim();
+  if (finalStmt) {
+    statements.push(finalStmt);
+  }
+
+  return statements;
 }
 
 function escapeSqlValue(val: any): string {
@@ -722,25 +769,51 @@ Gunakan utilitas CLI pg_restore/psql untuk memulihkan database.sql, dan salin/ek
         throw new Error('Backup archive does not contain database.sql');
       }
 
-      // 2. Restore database via psql
+      // 2. Restore database
       this.logger.log('Restoring database from SQL dump...');
-      let psqlExecutable = process.env.PSQL_PATH || 'psql';
-      if (process.platform === 'win32' && psqlExecutable === 'psql') {
-        const detectedPath = findPsqlOnWindows();
-        if (detectedPath) {
-          psqlExecutable = detectedPath;
-          this.logger.log(`Auto-detected psql path on Windows: "${psqlExecutable}"`);
-        } else {
-          this.logger.warn('psql executable not found in common Windows directories. Will try calling "psql" from PATH.');
+      const sqlContent = readFileSync(sqlPath, 'utf-8');
+      const isPrismaFallback = sqlContent.includes('Generated via Prisma Client fallback');
+
+      if (isPrismaFallback) {
+        this.logger.log('Detected programmatic Prisma fallback SQL dump. Restoring via Prisma Client...');
+        try {
+          const statements = splitSqlStatements(sqlContent);
+          this.logger.log(`Parsed ${statements.length} SQL statements. Executing database restore transaction...`);
+          
+          await this.prisma.$transaction(
+            async (tx) => {
+              for (const stmt of statements) {
+                await tx.$executeRawUnsafe(stmt);
+              }
+            },
+            {
+              timeout: 180000, // 3 minutes timeout for large datasets
+            }
+          );
+          this.logger.log('Programmatic database restore completed successfully.');
+        } catch (restoreError: any) {
+          this.logger.error(`Programmatic restore failed: ${restoreError.message}`, restoreError.stack);
+          throw new InternalServerErrorException(`Programmatic restore failed: ${restoreError.message}`);
         }
-      }
-      try {
-        await execFileAsync(psqlExecutable, ['-d', dbUrl, '-f', sqlPath], {
-          maxBuffer: 100 * 1024 * 1024,
-        });
-      } catch (psqlError: any) {
-        this.logger.error(`psql restore failed: ${psqlError.message}`, psqlError.stack);
-        throw new InternalServerErrorException(`psql restore failed: ${psqlError.message}. Make sure psql is in PATH.`);
+      } else {
+        let psqlExecutable = process.env.PSQL_PATH || 'psql';
+        if (process.platform === 'win32' && psqlExecutable === 'psql') {
+          const detectedPath = findPsqlOnWindows();
+          if (detectedPath) {
+            psqlExecutable = detectedPath;
+            this.logger.log(`Auto-detected psql path on Windows: "${psqlExecutable}"`);
+          } else {
+            this.logger.warn('psql executable not found in common Windows directories. Will try calling "psql" from PATH.');
+          }
+        }
+        try {
+          await execFileAsync(psqlExecutable, ['-d', dbUrl, '-f', sqlPath], {
+            maxBuffer: 100 * 1024 * 1024,
+          });
+        } catch (psqlError: any) {
+          this.logger.error(`psql restore failed: ${psqlError.message}`, psqlError.stack);
+          throw new InternalServerErrorException(`psql restore failed: ${psqlError.message}. Make sure psql is in PATH.`);
+        }
       }
 
       // 3. Restore uploads directory if present
