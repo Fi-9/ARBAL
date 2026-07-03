@@ -23,7 +23,8 @@ import {
   FileArchive,
   RefreshCw,
   X,
-  AlertTriangle
+  AlertTriangle,
+  Upload
 } from 'lucide-react';
 
 interface BackupItem {
@@ -54,6 +55,12 @@ export default function BackupRestoreView() {
   const [isRestoreConfirmOpen, setIsRestoreConfirmOpen] = useState(false);
   const [backupToRestore, setBackupToRestore] = useState<string | null>(null);
   const [confirmText, setConfirmText] = useState('');
+
+  // Upload and restore state
+  const fileInputRef = React.useRef<HTMLInputElement>(null);
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [isUploadConfirmOpen, setIsUploadConfirmOpen] = useState(false);
+  const [confirmUploadText, setConfirmUploadText] = useState('');
 
   // Fetch backups and metrics
   const { data, isLoading, isError, refetch, isRefetching } = useQuery<BackupResponse>({
@@ -108,6 +115,52 @@ export default function BackupRestoreView() {
       addToast(`Gagal memulihkan data: ${getFriendlyErrorMessage(err)}`, 'warning');
     }
   });
+
+  // Upload and Restore mutation
+  const uploadRestoreMutation = useMutation({
+    mutationFn: async (file: File) => {
+      const formData = new FormData();
+      formData.append('file', file);
+      const response = await api.post('/backup/upload-restore', formData, {
+        headers: {
+          'Content-Type': 'multipart/form-data',
+        },
+      });
+      return response.data;
+    },
+    onSuccess: () => {
+      addToast('Pemulihan data dari file unggahan berhasil diselesaikan.', 'success');
+      qc.invalidateQueries(); // Refresh all query data
+    },
+    onError: (err: any) => {
+      addToast(`Gagal mengunggah dan memulihkan data: ${getFriendlyErrorMessage(err)}`, 'warning');
+    }
+  });
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (!file.name.endsWith('.zip')) {
+      addToast('Berkas harus berupa file format ZIP cadangan.', 'warning');
+      if (fileInputRef.current) fileInputRef.current.value = '';
+      return;
+    }
+
+    setSelectedFile(file);
+    setConfirmUploadText('');
+    setIsUploadConfirmOpen(true);
+  };
+
+  const handleConfirmUploadRestore = () => {
+    if (selectedFile && confirmUploadText === 'PULIHKAN') {
+      uploadRestoreMutation.mutate(selectedFile);
+    }
+    setIsUploadConfirmOpen(false);
+    setSelectedFile(null);
+    setConfirmUploadText('');
+    if (fileInputRef.current) fileInputRef.current.value = '';
+  };
 
   // Format bytes to human readable sizes
   const formatSize = (mb: number) => {
@@ -318,6 +371,30 @@ export default function BackupRestoreView() {
             >
               <RefreshCw size={14} className={isRefetching ? 'animate-spin' : ''} />
             </button>
+            
+            <input
+              type="file"
+              ref={fileInputRef}
+              accept=".zip"
+              onChange={handleFileChange}
+              className="hidden"
+            />
+            
+            <button
+              id="btn-upload-backup"
+              onClick={() => fileInputRef.current?.click()}
+              disabled={isLoading || createBackupMutation.isPending || restoreBackupMutation.isPending || uploadRestoreMutation.isPending}
+              className="flex items-center space-x-1.5 bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs px-4 py-2.5 rounded-lg transition shadow-sm disabled:opacity-50"
+              title="Unggah berkas ZIP backup dan pulihkan database"
+            >
+              {uploadRestoreMutation.isPending ? (
+                <Loader2 size={13} className="animate-spin" />
+              ) : (
+                <Upload size={13} />
+              )}
+              <span>Upload & Pulihkan</span>
+            </button>
+
             <button
               id="btn-create-backup"
               onClick={() => createBackupMutation.mutate()}
@@ -526,6 +603,67 @@ export default function BackupRestoreView() {
               >
                 {restoreBackupMutation.isPending && <Loader2 size={13} className="animate-spin" />}
                 <span>Pulihkan Data</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Premium Custom Upload & Restore Confirmation Modal */}
+      {isUploadConfirmOpen && selectedFile && (
+        <div id="upload-backup-confirm-modal" className="fixed inset-0 z-[100] bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 UAT-modal animate-fade-in">
+          <div className="bg-white rounded-2xl w-full max-w-md overflow-hidden text-slate-800 border border-slate-200 shadow-2xl flex flex-col">
+            <div className="bg-slate-50 p-5 border-b border-slate-100 flex items-center justify-between">
+              <div className="flex items-center space-x-2 text-rose-700 font-bold text-sm">
+                <AlertTriangle size={18} className="text-rose-500 shrink-0" />
+                <span>Unggah & Pulihkan Cadangan</span>
+              </div>
+              <button 
+                onClick={() => { setIsUploadConfirmOpen(false); setSelectedFile(null); setConfirmUploadText(''); }} 
+                className="text-slate-400 hover:text-slate-700 hover:bg-slate-100 p-1.5 rounded-lg transition"
+              >
+                <X size={16} />
+              </button>
+            </div>
+            <div className="p-6 space-y-4">
+              <div className="bg-rose-50 border border-rose-200 rounded-xl p-4 flex items-start space-x-3 text-xs text-rose-950 leading-relaxed font-normal">
+                <ShieldAlert className="text-rose-600 shrink-0 mt-0.5" size={18} />
+                <div>
+                  <strong className="text-rose-950 font-bold">PERINGATAN: Tindakan Ini Menimpa Semua Data!</strong>
+                  <p className="mt-1">
+                    Seluruh data siswa, berkas unggahan, dan log aktivitas saat ini akan **dihapus sepenuhnya** dan digantikan oleh data dari berkas ZIP yang diunggah:
+                  </p>
+                </div>
+              </div>
+              <div className="bg-slate-50 border border-slate-100 rounded-xl p-4 font-mono text-[11px] font-bold text-slate-700 break-all select-all flex items-center space-x-2">
+                <FileArchive size={14} className="text-indigo-500 shrink-0" />
+                <span>{selectedFile.name} ({(selectedFile.size / 1024 / 1024).toFixed(2)} MB)</span>
+              </div>
+              <div className="space-y-1.5">
+                <label className="text-[11px] font-bold text-slate-500 uppercase tracking-wider block">Ketik "PULIHKAN" untuk Melanjutkan:</label>
+                <input
+                  type="text"
+                  value={confirmUploadText}
+                  onChange={(e) => setConfirmUploadText(e.target.value)}
+                  placeholder="Ketik PULIHKAN"
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs font-medium focus:ring-1 focus:ring-rose-500 focus:border-rose-500 outline-hidden font-bold"
+                />
+              </div>
+            </div>
+            <div className="bg-slate-50 p-4 border-t border-slate-100 flex justify-end gap-2.5 text-xs font-bold">
+              <button
+                onClick={() => { setIsUploadConfirmOpen(false); setSelectedFile(null); setConfirmUploadText(''); }}
+                className="px-4.5 py-2.5 bg-slate-200 hover:bg-slate-300 text-slate-800 rounded-xl transition cursor-pointer"
+              >
+                Batal
+              </button>
+              <button
+                onClick={handleConfirmUploadRestore}
+                disabled={uploadRestoreMutation.isPending || confirmUploadText !== 'PULIHKAN'}
+                className="px-4.5 py-2.5 bg-rose-600 hover:bg-rose-700 disabled:opacity-50 text-white rounded-xl transition shadow-sm hover:shadow-md cursor-pointer flex items-center space-x-1.5"
+              >
+                {uploadRestoreMutation.isPending && <Loader2 size={13} className="animate-spin" />}
+                <span>Unggah & Pulihkan Data</span>
               </button>
             </div>
           </div>

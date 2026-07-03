@@ -7,9 +7,12 @@ import {
   Req,
   UseGuards,
   Res,
+  UseInterceptors,
+  UploadedFile,
 } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 import { AuthGuard } from '@nestjs/passport';
-import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
+import { ApiTags, ApiOperation, ApiBearerAuth, ApiConsumes, ApiBody } from '@nestjs/swagger';
 import { Response } from 'express';
 import { BackupService } from './backup.service';
 import { Permissions } from '../../common/decorators/permissions.decorator';
@@ -78,15 +81,38 @@ export class BackupController {
     res.download(filePath, friendlyName);
   }
 
-  /**
-   * POST /api/v1/backup/restore/:fileName — restore from a backup file
-   * WARNING: This will replace current data!
-   */
   @Post('restore/:fileName')
   @Permissions('backup.manage')
   @ApiOperation({ summary: 'Restore database and uploads from a backup file' })
   async restore(@Param('fileName') fileName: string, @Req() req: any) {
     return this.backupService.restoreFromBackup(fileName, req.user.id);
+  }
+
+  /**
+   * POST /api/v1/backup/upload-restore — upload a ZIP backup file and restore it
+   * WARNING: This will replace current data!
+   */
+  @Post('upload-restore')
+  @Permissions('backup.manage')
+  @UseInterceptors(
+    FileInterceptor('file', {
+      limits: {
+        fileSize: 100 * 1024 * 1024, // 100MB limit for backup zip
+      },
+    }),
+  )
+  @ApiOperation({ summary: 'Upload a backup ZIP file and restore database + uploads' })
+  @ApiConsumes('multipart/form-data')
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: {
+        file: { type: 'string', format: 'binary' },
+      },
+    },
+  })
+  async uploadAndRestore(@UploadedFile() file: Express.Multer.File, @Req() req: any) {
+    return this.backupService.uploadAndRestoreBackup(file, req.user.id);
   }
 
   /**

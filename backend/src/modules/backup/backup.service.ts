@@ -746,6 +746,27 @@ Gunakan utilitas CLI pg_restore/psql untuk memulihkan database.sql, dan salin/ek
     }
   }
 
+  async uploadAndRestoreBackup(file: Express.Multer.File, actorUserId: string): Promise<{ message: string; restored: string }> {
+    const buffer = file.buffer;
+    if (!buffer || buffer.length < 4 || buffer[0] !== 0x50 || buffer[1] !== 0x4b || buffer[2] !== 0x03 || buffer[3] !== 0x04) {
+      throw new BadRequestException('Format berkas harus ZIP cadangan valid');
+    }
+
+    if (!existsSync(BACKUPS_DIR)) {
+      mkdirSync(BACKUPS_DIR, { recursive: true });
+    }
+
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const fileName = `arbal-backup-uploaded-${timestamp}.zip`;
+    const filePath = resolve(BACKUPS_DIR, fileName);
+    ensureInsideDirectory(BACKUPS_DIR, filePath);
+
+    writeFileSync(filePath, buffer);
+    this.logger.log(`[Backup] Uploaded backup saved to: ${filePath}`);
+
+    return this.restoreFromBackup(fileName, actorUserId);
+  }
+
   async deleteBackup(fileName: string, actorUserId?: string): Promise<{ message: string }> {
     const filePath = resolveBackupFile(fileName);
     if (!existsSync(filePath)) {
