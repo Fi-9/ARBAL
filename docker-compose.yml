@@ -24,14 +24,17 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
+      network: host
     container_name: arbal-backend
     environment:
       - PORT=3001
       - DATABASE_URL=postgres://${POSTGRES_USER:-arbal_admin}:${POSTGRES_PASSWORD:-arbal_secure_pass_2026}@db:5432/${POSTGRES_DB:-arbal_db}
       - JWT_SECRET=${JWT_SECRET:-arbal_jwt_secret_key_change_me_in_prod}
       - JWT_REFRESH_SECRET=${JWT_REFRESH_SECRET:-arbal_jwt_refresh_secret_key_change_me_in_prod}
-      - CORS_ORIGINS=https://arsip.smkmustaqbal.sch.id,http://localhost,http://localhost:3000,http://192.168.100.112
-      - APP_URL=${APP_URL:-https://arsip.smkmustaqbal.sch.id}
+      - CORS_ORIGINS=${CORS_ORIGINS:-https://arsip.insanmustaqbal.or.id,http://localhost,http://localhost:3000,http://192.168.100.112}
+      - APP_URL=${APP_URL:-https://arsip.insanmustaqbal.or.id}
+      - OCR_SERVICE_URL=${OCR_SERVICE_URL:-http://ocr:8000}
+      - OCR_INTERNAL_TOKEN=${OCR_INTERNAL_TOKEN:-}
       - APP_VERSION=${APP_VERSION:-1.0.0}
       - APP_BUILD=${APP_BUILD:-development}
       - TZ=Asia/Jakarta
@@ -50,18 +53,42 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
-  # 3. React Frontend (served via Nginx and Reverse Proxying /api to Backend)
+  # 3. Optional Python OCR Microservice
+  ocr:
+    build:
+      context: ./ocr-service
+      dockerfile: Dockerfile
+      network: host
+    container_name: arbal-ocr
+    profiles:
+      - ocr
+    environment:
+      - PORT=8000
+      - CORS_ORIGIN=${OCR_CORS_ORIGIN:-http://backend:3001}
+      - OCR_INTERNAL_TOKEN=${OCR_INTERNAL_TOKEN:-}
+      - LOG_LEVEL=${OCR_LOG_LEVEL:-INFO}
+      - PADDLE_LANG=${PADDLE_LANG:-id}
+      - PADDLE_USE_GPU=${PADDLE_USE_GPU:-false}
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+
+  # 4. React Frontend (served via Nginx and Reverse Proxying /api to Backend)
   frontend:
     build:
       context: .
       dockerfile: Dockerfile
+      network: host
       args:
         - VITE_API_BASE_URL=/api/v1
     container_name: arbal-frontend
     environment:
       - TZ=Asia/Jakarta
     ports:
-      - "3000:80"
+      - "${FRONTEND_PORT:-3000}:80"
     depends_on:
       backend:
         condition: service_healthy

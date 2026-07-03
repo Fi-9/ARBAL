@@ -1,6 +1,8 @@
 # 📋 Panduan Implementasi & Hubungan Arsitektur Mandiri (Self-Hosted)
 ## ARBAL — Arsip Mustaqbal (PKBM Teknologi Mustaqbal)
 
+> Catatan pembaruan: dokumen ini berisi rencana lama yang masih menyebut Coolify proxy bawaan, Express monolith, TimescaleDB, pgAdmin, dan Grafana. Untuk kondisi repo saat ini, jalur deploy yang direkomendasikan adalah frontend React statis + backend NestJS + PostgreSQL biasa, dengan domain `arsip.insanmustaqbal.or.id` dipublikasikan melalui **Zoraxy** sebagai reverse proxy.
+
 Dokumen ini menjelaskan strategi teknis untuk melakukan migrasi, deployment, dan pemantauan sistem kearsipan **ARBAL** pada server mandiri (*local/cloud VPS*) menggunakan **Coolify**, **PostgreSQL dengan Ekstensi TimescaleDB**, **pgAdmin**, serta visualisasi metriks di **Grafana**.
 
 ---

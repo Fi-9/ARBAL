@@ -172,3 +172,46 @@ npx prisma migrate dev
 
 ### 4. Batasan Akses Guru
 * Hak akses `GURU` dibatasi ketat pada backend gateway (`jwt.strategy.ts`) dan frontend UI. Setiap panggilan API mutasi (unggah, hapus, tambah, atau konfigurasi) oleh token pengguna dengan peran Guru akan ditolak dengan respons HTTP `403 Forbidden`.
+
+---
+
+## 🚀 Deploy Produksi Saat Ini
+
+Rekomendasi deploy ARBAL saat ini:
+
+1. `frontend` React dibangun menjadi static site dan dilayani container Nginx internal.
+2. `backend` NestJS berjalan di port internal `3001`.
+3. `db` PostgreSQL berjalan di jaringan internal Docker.
+4. Domain publik yang dipakai adalah `https://arsip.insanmustaqbal.or.id`.
+5. Reverse proxy publik dikelola oleh **Zoraxy**, bukan langsung oleh proxy bawaan Coolify.
+
+### Pola Reverse Proxy yang Disarankan
+
+Browser sebaiknya hanya mengenal **satu origin publik**:
+
+* `https://arsip.insanmustaqbal.or.id` → diarahkan oleh Zoraxy ke service `frontend`
+* request `/api/*` dari origin yang sama → diteruskan oleh Nginx frontend ke service `backend:3001`
+
+Dengan pola ini:
+
+* `VITE_API_BASE_URL` cukup tetap `/api/v1`
+* cookie `refreshToken` tetap bekerja dengan `withCredentials: true`
+* CORS menjadi lebih sederhana karena frontend dan API terlihat sebagai satu origin dari sisi browser
+
+### Nilai Environment Produksi yang Penting
+
+Set minimal nilai berikut saat deploy:
+
+```env
+APP_URL=https://arsip.insanmustaqbal.or.id
+CORS_ORIGINS=https://arsip.insanmustaqbal.or.id
+NODE_ENV=production
+PORT=3001
+JWT_SECRET=<secret-random-panjang>
+JWT_REFRESH_SECRET=<secret-random-panjang-berbeda>
+DATABASE_URL=postgresql://<user>:<password>@db:5432/<db_name>
+```
+
+### Catatan Zoraxy
+
+Di Zoraxy, arahkan virtual host/domain `arsip.insanmustaqbal.or.id` ke service frontend yang membuka HTTP internal di port `3000` pada host Docker. Tidak perlu mengekspos PostgreSQL ke publik, dan backend juga sebaiknya tetap hanya dapat diakses dari jaringan internal stack.
