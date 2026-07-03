@@ -4,12 +4,12 @@ set -e
 
 echo "🚀 Starting ARBAL Backend Entrypoint..."
 
-# 1. Ensure required storage directories exist
-echo "📂 Checking storage folders..."
+# 1. Ensure required storage directories exist and are owned by the non-root node user
+echo "📂 Checking storage folders and fixing permissions..."
 mkdir -p /app/uploads /app/backups /app/backups/db-only
+chown -R node:node /app/uploads /app/backups /app/backups/db-only
 
 # 2. Extract database connection details for pg_isready check
-# DATABASE_URL looks like: postgresql://user:pass@host:port/db or postgres://user:pass@host:port/db
 DB_HOST=$(echo "$DATABASE_URL" | sed -E 's/.*@([^:]+).*/\1/')
 DB_PORT=$(echo "$DATABASE_URL" | sed -E 's/.*:[0-9]+\/([^\?]+)/&/' | sed -E 's/.*:([0-9]+)\/.*/\1/')
 # Fallback to default port if sed failed
@@ -24,14 +24,14 @@ until pg_isready -h "$DB_HOST" -p "$DB_PORT" -t 5; do
 done
 echo "✅ Database is online and ready!"
 
-# 3. Run Prisma Migrations with retry logic
+# 3. Run Prisma Migrations with retry logic (running as the non-root node user)
 MAX_RETRIES=3
 RETRY_DELAY=5
 attempt=1
 
 while [ $attempt -le $MAX_RETRIES ]; do
-  echo "🔄 Running Prisma migrations (attempt $attempt/$MAX_RETRIES)..."
-  if npx prisma migrate deploy; then
+  echo "🔄 Running Prisma migrations as node user (attempt $attempt/$MAX_RETRIES)..."
+  if su-exec node npx prisma migrate deploy; then
     echo "✅ Database migrations applied successfully."
     break
   else
@@ -46,5 +46,5 @@ while [ $attempt -le $MAX_RETRIES ]; do
   fi
 done
 
-echo "🎉 Pre-flight checks passed! Handing over control to: $@"
-exec "$@"
+echo "🎉 Pre-flight checks passed! Handing over control to node user: $@"
+exec su-exec node "$@"

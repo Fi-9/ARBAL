@@ -13,7 +13,7 @@ RUN npm run build
 # Production stage
 FROM node:20-alpine
 
-RUN apk add --no-cache postgresql-client unzip
+RUN apk add --no-cache postgresql-client unzip su-exec
 
 WORKDIR /app
 
@@ -29,8 +29,6 @@ RUN chmod +x entrypoint.sh
 
 # Create folders and set ownership to node user
 RUN mkdir -p /app/uploads /app/backups /app/backups/db-only && chown -R node:node /app
-
-USER node
 
 EXPOSE 3001
 
