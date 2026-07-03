@@ -64,8 +64,8 @@ describe('BackupService', () => {
         .toThrow(BadRequestException);
     });
 
-    it('should throw BadRequestException when restore filename is not in expected format', async () => {
-      await expect(service.restoreFromBackup('arbal-backup-wrong-format.zip', 'user-id'))
+    it('should throw BadRequestException when restore filename does not end with .zip', async () => {
+      await expect(service.restoreFromBackup('arbal-backup-wrong-format.txt', 'user-id'))
         .rejects
         .toThrow(BadRequestException);
     });

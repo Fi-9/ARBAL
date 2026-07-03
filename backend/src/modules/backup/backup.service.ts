@@ -23,7 +23,7 @@ function getRetentionDays(): number {
   return val ? parseInt(val, 10) : 90;
 }
 
-const BACKUP_FILE_PATTERN = /^arbal-backup-(?:(?:daily|weekly|monthly|manual)-)?\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z\.zip$/;
+const BACKUP_FILE_PATTERN = /^.+\.zip$/i;
 
 function ensureInsideDirectory(directory: string, candidatePath: string): void {
   const relativePath = relative(directory, candidatePath);
@@ -795,8 +795,10 @@ Gunakan utilitas CLI pg_restore/psql untuk memulihkan database.sql, dan salin/ek
       mkdirSync(BACKUPS_DIR, { recursive: true });
     }
 
-    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-    const fileName = `arbal-backup-manual-${timestamp}.zip`;
+    const fileName = basename(file.originalname);
+    if (!fileName.toLowerCase().endsWith('.zip')) {
+      throw new BadRequestException('Nama berkas harus berakhiran .zip');
+    }
     const filePath = resolve(BACKUPS_DIR, fileName);
     ensureInsideDirectory(BACKUPS_DIR, filePath);
 
