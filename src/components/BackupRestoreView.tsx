@@ -51,6 +51,10 @@ export default function BackupRestoreView() {
   const [isConfirmOpen, setIsConfirmOpen] = useState(false);
   const [backupToDelete, setBackupToDelete] = useState<string | null>(null);
 
+  const [isRestoreConfirmOpen, setIsRestoreConfirmOpen] = useState(false);
+  const [backupToRestore, setBackupToRestore] = useState<string | null>(null);
+  const [confirmText, setConfirmText] = useState('');
+
   // Fetch backups and metrics
   const { data, isLoading, isError, refetch, isRefetching } = useQuery<BackupResponse>({
     queryKey: ['backups'],
@@ -87,6 +91,21 @@ export default function BackupRestoreView() {
     },
     onError: (err: any) => {
       addToast(`Error: ${getFriendlyErrorMessage(err)}`, 'warning');
+    }
+  });
+
+  // Restore backup mutation
+  const restoreBackupMutation = useMutation({
+    mutationFn: async (fileName: string) => {
+      const response = await api.post(`/backup/restore/${fileName}`);
+      return response.data;
+    },
+    onSuccess: () => {
+      addToast('Pemulihan data (Restore) berhasil diselesaikan.', 'success');
+      qc.invalidateQueries(); // Refresh all query data to reflect restored database
+    },
+    onError: (err: any) => {
+      addToast(`Gagal memulihkan data: ${getFriendlyErrorMessage(err)}`, 'warning');
     }
   });
 
@@ -188,6 +207,21 @@ export default function BackupRestoreView() {
     }
     setIsConfirmOpen(false);
     setBackupToDelete(null);
+  };
+
+  const handleRestore = (fileName: string) => {
+    setBackupToRestore(fileName);
+    setConfirmText('');
+    setIsRestoreConfirmOpen(true);
+  };
+
+  const handleConfirmRestore = () => {
+    if (backupToRestore && confirmText === 'PULIHKAN') {
+      restoreBackupMutation.mutate(backupToRestore);
+    }
+    setIsRestoreConfirmOpen(false);
+    setBackupToRestore(null);
+    setConfirmText('');
   };
 
   const backupsList = data?.backups || [];
@@ -348,7 +382,7 @@ export default function BackupRestoreView() {
                       <div className="inline-flex items-center space-x-2">
                         <button
                           onClick={() => handleDownload(item.fileName)}
-                          disabled={downloadingFile !== null}
+                          disabled={downloadingFile !== null || restoreBackupMutation.isPending || deleteBackupMutation.isPending}
                           className="bg-slate-50 hover:bg-emerald-50 hover:text-emerald-700 text-slate-600 p-2 rounded-lg border border-slate-200 hover:border-emerald-200 transition disabled:opacity-50 flex items-center space-x-1"
                           title="Unduh Berkas ZIP"
                         >
@@ -359,10 +393,24 @@ export default function BackupRestoreView() {
                           )}
                           <span className="text-[10px] font-bold">Unduh</span>
                         </button>
+
+                        <button
+                          onClick={() => handleRestore(item.fileName)}
+                          disabled={downloadingFile !== null || restoreBackupMutation.isPending || deleteBackupMutation.isPending}
+                          className="bg-amber-50 hover:bg-amber-100 hover:text-amber-700 text-slate-600 p-2 rounded-lg border border-amber-200 hover:border-amber-300 transition disabled:opacity-50 flex items-center space-x-1"
+                          title="Pulihkan Berkas Cadangan ini ke Database"
+                        >
+                          {restoreBackupMutation.isPending && backupToRestore === item.fileName ? (
+                            <Loader2 size={13} className="animate-spin" />
+                          ) : (
+                            <RefreshCw size={13} />
+                          )}
+                          <span className="text-[10px] font-bold">Pulihkan</span>
+                        </button>
                         
                         <button
                           onClick={() => handleDelete(item.fileName)}
-                          disabled={deleteBackupMutation.isPending}
+                          disabled={downloadingFile !== null || restoreBackupMutation.isPending || deleteBackupMutation.isPending}
                           className="bg-rose-50 hover:bg-rose-100 text-rose-700 p-2 rounded-lg border border-rose-100 transition disabled:opacity-50"
                           title="Hapus Backup dari Disk"
                         >
@@ -417,6 +465,67 @@ export default function BackupRestoreView() {
               >
                 {deleteBackupMutation.isPending && <Loader2 size={13} className="animate-spin" />}
                 <span>Hapus Permanen</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Premium Custom Restore Confirmation Modal */}
+      {isRestoreConfirmOpen && (
+        <div id="restore-backup-confirm-modal" className="fixed inset-0 z-[100] bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 UAT-modal animate-fade-in">
+          <div className="bg-white rounded-2xl w-full max-w-md overflow-hidden text-slate-800 border border-slate-200 shadow-2xl flex flex-col">
+            <div className="bg-slate-50 p-5 border-b border-slate-100 flex items-center justify-between">
+              <div className="flex items-center space-x-2 text-amber-700 font-bold text-sm">
+                <AlertTriangle size={18} className="text-amber-500 shrink-0" />
+                <span>Konfirmasi Pemulihan Cadangan (Restore)</span>
+              </div>
+              <button 
+                onClick={() => { setIsRestoreConfirmOpen(false); setBackupToRestore(null); setConfirmText(''); }} 
+                className="text-slate-400 hover:text-slate-700 hover:bg-slate-100 p-1.5 rounded-lg transition"
+              >
+                <X size={16} />
+              </button>
+            </div>
+            <div className="p-6 space-y-4">
+              <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 flex items-start space-x-3 text-xs text-amber-900 leading-relaxed font-normal">
+                <ShieldAlert className="text-amber-600 shrink-0 mt-0.5" size={18} />
+                <div>
+                  <strong className="text-amber-950 font-bold">PERINGATAN: Tindakan Ini Destruktif!</strong>
+                  <p className="mt-1">
+                    Seluruh data siswa, berkas unggahan, dan log aktivitas saat ini akan **dihapus sepenuhnya** dan digantikan oleh data dari berkas cadangan berikut.
+                  </p>
+                </div>
+              </div>
+              <div className="bg-slate-50 border border-slate-100 rounded-xl p-4 font-mono text-[11px] font-bold text-slate-700 break-all select-all flex items-center space-x-2">
+                <Database size={14} className="text-slate-400 shrink-0" />
+                <span>{backupToRestore}</span>
+              </div>
+              <div className="space-y-1.5">
+                <label className="text-[11px] font-bold text-slate-500 uppercase tracking-wider block">Ketik "PULIHKAN" untuk Melanjutkan:</label>
+                <input
+                  type="text"
+                  value={confirmText}
+                  onChange={(e) => setConfirmText(e.target.value)}
+                  placeholder="Ketik PULIHKAN"
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs font-medium focus:ring-1 focus:ring-amber-500 focus:border-amber-500 outline-hidden font-bold"
+                />
+              </div>
+            </div>
+            <div className="bg-slate-50 p-4 border-t border-slate-100 flex justify-end gap-2.5 text-xs font-bold">
+              <button
+                onClick={() => { setIsRestoreConfirmOpen(false); setBackupToRestore(null); setConfirmText(''); }}
+                className="px-4.5 py-2.5 bg-slate-200 hover:bg-slate-300 text-slate-800 rounded-xl transition cursor-pointer"
+              >
+                Batal
+              </button>
+              <button
+                onClick={handleConfirmRestore}
+                disabled={restoreBackupMutation.isPending || confirmText !== 'PULIHKAN'}
+                className="px-4.5 py-2.5 bg-amber-600 hover:bg-amber-700 disabled:opacity-50 text-white rounded-xl transition shadow-sm hover:shadow-md cursor-pointer flex items-center space-x-1.5"
+              >
+                {restoreBackupMutation.isPending && <Loader2 size={13} className="animate-spin" />}
+                <span>Pulihkan Data</span>
               </button>
             </div>
           </div>

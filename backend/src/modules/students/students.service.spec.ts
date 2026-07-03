@@ -1,6 +1,19 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { StudentsService } from './students.service';
 import { PrismaService } from '../../prisma/prisma.service';
+import { BackupService } from '../backup/backup.service';
+
+jest.mock('archiver', () => {
+  return {
+    ZipArchive: jest.fn().mockImplementation(() => ({
+      pipe: jest.fn(),
+      append: jest.fn(),
+      directory: jest.fn(),
+      finalize: jest.fn().mockResolvedValue(undefined),
+      on: jest.fn(),
+    })),
+  };
+});
 
 describe('StudentsService', () => {
   let service: StudentsService;
@@ -56,10 +69,15 @@ describe('StudentsService', () => {
   };
 
   beforeEach(async () => {
+    const mockBackupService = {
+      createDbOnlyBackup: jest.fn().mockResolvedValue(undefined),
+    };
+
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         StudentsService,
         { provide: PrismaService, useValue: mockPrismaService },
+        { provide: BackupService, useValue: mockBackupService },
       ],
     }).compile();
 

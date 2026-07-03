@@ -4,13 +4,15 @@ import { Cron } from '@nestjs/schedule';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { ZipArchive } from 'archiver';
-import { createWriteStream, existsSync, mkdirSync, readdirSync, statSync, unlinkSync } from 'fs';
+import { createWriteStream, existsSync, mkdirSync, readdirSync, statSync, unlinkSync, writeFileSync } from 'fs';
 import { basename, isAbsolute, relative, resolve } from 'path';
 
 const execFileAsync = promisify(execFile);
 
 const BACKUPS_DIR = resolve(__dirname, '..', '..', '..', 'backups');
 const UPLOADS_DIR = resolve(__dirname, '..', '..', '..', 'uploads');
+const DB_ONLY_BACKUPS_DIR = resolve(BACKUPS_DIR, 'db-only');
+const MAX_DB_ONLY_BACKUPS = 50;
 function getMaxBackups(): number {
   const val = process.env.MAX_BACKUPS;
   return val ? parseInt(val, 10) : 30;
@@ -787,6 +789,65 @@ Gunakan utilitas CLI pg_restore/psql untuk memulihkan database.sql, dan salin/ek
       });
     } catch (err: any) {
       this.logger.warn(`Failed to write audit log for ${action}: ${err.message}`);
+    }
+  }
+
+  /**
+   * Lightweight database-only backup triggered on data mutations.
+   * Generates a SQL dump via Prisma (no uploads, no ZIP) and saves it
+   * to backups/db-only/. Skips if the last db-only backup is < 30s old
+   * to avoid flooding during batch operations.
+   */
+  async createDbOnlyBackup(reason?: string): Promise<void> {
+    try {
+      // Ensure directory exists
+      if (!existsSync(DB_ONLY_BACKUPS_DIR)) {
+        mkdirSync(DB_ONLY_BACKUPS_DIR, { recursive: true });
+      }
+
+      // Debounce: skip if the most recent db-only backup is less than 30 seconds old
+      const existingFiles = readdirSync(DB_ONLY_BACKUPS_DIR)
+        .filter(f => f.endsWith('.sql'))
+        .sort()
+        .reverse();
+
+      if (existingFiles.length > 0) {
+        const latestFile = resolve(DB_ONLY_BACKUPS_DIR, existingFiles[0]);
+        const stat = statSync(latestFile);
+        const ageMs = Date.now() - stat.mtimeMs;
+        if (ageMs < 30_000) {
+          this.logger.debug(`[DbOnlyBackup] Skipped — last backup was ${Math.round(ageMs / 1000)}s ago (debounce 30s)`);
+          return;
+        }
+      }
+
+      // Generate SQL dump
+      const sqlDump = await this.generateSqlBackupViaPrisma();
+      const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+      const fileName = `db-snapshot-${timestamp}.sql`;
+      const filePath = resolve(DB_ONLY_BACKUPS_DIR, fileName);
+
+      writeFileSync(filePath, sqlDump, 'utf-8');
+      this.logger.log(`[DbOnlyBackup] Saved: ${fileName} (reason: ${reason || 'mutation'})`);
+
+      // Cleanup: keep only the most recent MAX_DB_ONLY_BACKUPS files
+      const allFiles = readdirSync(DB_ONLY_BACKUPS_DIR)
+        .filter(f => f.endsWith('.sql'))
+        .sort()
+        .reverse();
+
+      if (allFiles.length > MAX_DB_ONLY_BACKUPS) {
+        const toDelete = allFiles.slice(MAX_DB_ONLY_BACKUPS);
+        for (const old of toDelete) {
+          try {
+            unlinkSync(resolve(DB_ONLY_BACKUPS_DIR, old));
+            this.logger.debug(`[DbOnlyBackup] Cleaned up old snapshot: ${old}`);
+          } catch { /* ignore */ }
+        }
+      }
+    } catch (err: any) {
+      // Never let backup failures break the main operation
+      this.logger.warn(`[DbOnlyBackup] Failed: ${err.message}`);
     }
   }
 }

@@ -3,8 +3,10 @@ import { DocumentsController } from './documents.controller';
 import { DocumentsService } from './documents.service';
 import { OcrService } from './ocr.service';
 import { LocalStorageProvider } from './storage/local-storage.provider';
+import { BackupModule } from '../backup/backup.module';
 
 @Module({
+  imports: [BackupModule],
   controllers: [DocumentsController],
   providers: [
     DocumentsService,

@@ -1,4 +1,4 @@
-import { Controller, Get, Req } from '@nestjs/common';
+import { Controller, Get, Req, ServiceUnavailableException } from '@nestjs/common';
 import { Request } from 'express';
 import { JwtService } from '@nestjs/jwt';
 import { PrismaService } from '../../prisma/prisma.service';
@@ -73,6 +73,10 @@ export class HealthController {
       diagnostics.diskFree = formatBytes(freeSpace);
     } catch {
       // Fallback
+    }
+
+    if (diagnostics.status === 'ERROR') {
+      throw new ServiceUnavailableException(diagnostics);
     }
 
     return diagnostics;

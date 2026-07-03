@@ -19,11 +19,16 @@ interface Actor {
   role: string;
 }
 
+import { BackupService } from '../backup/backup.service';
+
 @Injectable()
 export class StudentsService {
   private readonly logger = new Logger(StudentsService.name);
 
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private backupService: BackupService,
+  ) {}
 
   private calculateCompletenessPercent(student: any, requiredDocTypes: string[]): number {
     if (requiredDocTypes.length === 0) return 100;
@@ -357,6 +362,9 @@ export class StudentsService {
         include: { Guardian: true, Document: true, AcademicYear: true },
       });
       return this.minimizeStudentPii(res, actor);
+    }).then((result) => {
+      this.backupService.createDbOnlyBackup('CREATE_STUDENT').catch(() => {});
+      return result;
     });
   }
 
@@ -624,6 +632,9 @@ export class StudentsService {
         include: { Guardian: true, Document: true, AcademicYear: true },
       });
       return this.minimizeStudentPii(res, actor);
+    }).then((result) => {
+      this.backupService.createDbOnlyBackup('UPDATE_STUDENT').catch(() => {});
+      return result;
     });
   }
 
@@ -671,6 +682,9 @@ export class StudentsService {
       });
 
       return student;
+    }).then((result) => {
+      this.backupService.createDbOnlyBackup('SOFT_DELETE_STUDENT').catch(() => {});
+      return result;
     });
   }
 
@@ -709,6 +723,9 @@ export class StudentsService {
       });
 
       return year;
+    }).then((result) => {
+      this.backupService.createDbOnlyBackup('ACADEMIC_YEAR_CREATED').catch(() => {});
+      return result;
     });
   }
 
@@ -745,6 +762,9 @@ export class StudentsService {
         });
 
         return year;
+      }).then((result) => {
+        this.backupService.createDbOnlyBackup('ACADEMIC_YEAR_UPDATED').catch(() => {});
+        return result;
       });
     }
 
@@ -775,6 +795,9 @@ export class StudentsService {
           });
 
           return year;
+        }).then((result) => {
+          this.backupService.createDbOnlyBackup('ACADEMIC_YEAR_UPDATED').catch(() => {});
+          return result;
         });
       }
     }
@@ -813,6 +836,9 @@ export class StudentsService {
       });
 
       return year;
+    }).then((result) => {
+      this.backupService.createDbOnlyBackup('ACADEMIC_YEAR_ACTIVATED').catch(() => {});
+      return result;
     });
   }
 
@@ -873,6 +899,9 @@ export class StudentsService {
       });
 
       return deletedYear;
+    }).then((result) => {
+      this.backupService.createDbOnlyBackup('ACADEMIC_YEAR_DELETED').catch(() => {});
+      return result;
     });
   }
 
@@ -913,6 +942,9 @@ export class StudentsService {
       });
 
       return newClass;
+    }).then((result) => {
+      this.backupService.createDbOnlyBackup('CLASS_CREATED').catch(() => {});
+      return result;
     });
   }
 
@@ -966,6 +998,9 @@ export class StudentsService {
       });
 
       return updatedClass;
+    }).then((result) => {
+      this.backupService.createDbOnlyBackup('CLASS_UPDATED').catch(() => {});
+      return result;
     });
   }
 
@@ -1001,6 +1036,9 @@ export class StudentsService {
       });
 
       return existing;
+    }).then((result) => {
+      this.backupService.createDbOnlyBackup('CLASS_DELETED').catch(() => {});
+      return result;
     });
   }
 
@@ -1082,6 +1120,9 @@ export class StudentsService {
         where: { id: restored.id },
         include: { Guardian: true, Document: true },
       });
+    }).then((result) => {
+      this.backupService.createDbOnlyBackup('RESTORE_STUDENT').catch(() => {});
+      return result;
     });
   }
 
@@ -1148,6 +1189,8 @@ export class StudentsService {
     for (const filePath of filesToDelete) {
       try { unlinkSync(filePath); } catch { /* file already gone — safe to ignore */ }
     }
+
+    this.backupService.createDbOnlyBackup('PERMANENT_DELETE_STUDENT').catch(() => {});
 
     return result;
   }

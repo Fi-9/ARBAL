@@ -53,11 +53,14 @@ function detectMimeFromBuffer(buffer: Buffer): string | null {
   return null;
 }
 
+import { BackupService } from '../backup/backup.service';
+
 @Injectable()
 export class DocumentsService {
   constructor(
     private prisma: PrismaService,
     @Inject('StorageProvider') private storage: StorageProvider,
+    private backupService: BackupService,
   ) {}
 
   /** Get all active documents for a given student */
@@ -220,6 +223,9 @@ export class DocumentsService {
         });
 
         return doc;
+      }).then((result) => {
+        this.backupService.createDbOnlyBackup('DOCUMENT_UPLOAD').catch(() => {});
+        return result;
       });
     } catch (err) {
       try {
@@ -309,6 +315,9 @@ export class DocumentsService {
       });
 
       return doc;
+    }).then((result) => {
+      this.backupService.createDbOnlyBackup('DOCUMENT_UPDATE_STATUS').catch(() => {});
+      return result;
     });
   }
 
@@ -343,6 +352,9 @@ export class DocumentsService {
       });
 
       return { message: `Document "${doc.originalName}" moved to trash` };
+    }).then((result) => {
+      this.backupService.createDbOnlyBackup('DOCUMENT_SOFT_DELETE').catch(() => {});
+      return result;
     });
   }
 
@@ -388,6 +400,9 @@ export class DocumentsService {
       });
 
       return restored;
+    }).then((result) => {
+      this.backupService.createDbOnlyBackup('DOCUMENT_RESTORE').catch(() => {});
+      return result;
     });
   }
 
@@ -424,6 +439,8 @@ export class DocumentsService {
       // Ignore errors if file already deleted/gone
     }
 
+    this.backupService.createDbOnlyBackup('DOCUMENT_PERMANENT_DELETE').catch(() => {});
+
     return result;
   }
 
@@ -454,6 +471,9 @@ export class DocumentsService {
       });
 
       return doc;
+    }).then((result) => {
+      this.backupService.createDbOnlyBackup('DOCUMENT_REVIEW_STATUS').catch(() => {});
+      return result;
     });
   }
 }
