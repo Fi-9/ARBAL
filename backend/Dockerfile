@@ -4,7 +4,7 @@ FROM node:20-alpine AS builder
 WORKDIR /app
 
 COPY package*.json ./
-RUN npm install
+RUN npm ci
 
 COPY . .
 RUN npx prisma generate
@@ -18,14 +18,21 @@ RUN apk add --no-cache postgresql-client unzip
 WORKDIR /app
 
 COPY package*.json ./
-RUN npm install --only=production
+RUN npm ci --omit=dev
 
 COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/node_modules/.prisma ./node_modules/.prisma
 COPY --from=builder /app/prisma ./prisma
 COPY --from=builder /app/prisma.config.js ./prisma.config.js
+COPY entrypoint.sh ./entrypoint.sh
+RUN chmod +x entrypoint.sh
+
+# Create folders and set ownership to node user
+RUN mkdir -p /app/uploads /app/backups /app/backups/db-only && chown -R node:node /app
+
+USER node
 
 EXPOSE 3001
 
-# Run migrations and start the backend in production mode
-CMD ["sh", "-c", "mkdir -p /app/uploads /app/backups && npx prisma migrate deploy && npm run start:prod"]
+ENTRYPOINT ["./entrypoint.sh"]
+CMD ["node", "dist/main"]

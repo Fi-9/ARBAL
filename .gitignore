@@ -17,4 +17,5 @@ coverage/
 /backend/backups/
 /backend/src/modules/backup/restore-*
 /backups/restore-*
+/scratch/
 

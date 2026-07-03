@@ -98,8 +98,29 @@ async function bootstrap() {
       });
       console.log('🌱 Created SYSTEM user for automated system event audit logs.');
     }
+
+    // Seed default admin account if no real users exist (except SYSTEM) for bootstrap/recovery
+    const userCount = await prisma.user.count({ where: { NOT: { id: 'SYSTEM' } } });
+    if (userCount === 0) {
+      const bcrypt = require('bcryptjs');
+      const passwordHash = await bcrypt.hash('admin123', 12);
+      const role = await prisma.role.findFirst({ where: { name: 'SUPER_ADMIN' } });
+      if (role) {
+        await prisma.user.create({
+          data: {
+            id: 'admin-user-default-id',
+            name: 'Admin ARBAL',
+            email: 'admin@arbal.local',
+            passwordHash,
+            isActive: true,
+            roleId: role.id,
+          },
+        });
+        console.log('🌱 Seeded default admin user (admin@arbal.local / admin123) for bootstrap/recovery.');
+      }
+    }
   } catch (err: any) {
-    console.error('Failed to verify/create SYSTEM user:', err.message);
+    console.error('Failed to verify/create SYSTEM or default admin user:', err.message);
   }
 
   // Seed default classes if table is empty

@@ -1,6 +1,7 @@
-import { Controller, Get, Req, ServiceUnavailableException } from '@nestjs/common';
-import { Request } from 'express';
-import { JwtService } from '@nestjs/jwt';
+import { Controller, Get, Req, ServiceUnavailableException, UseGuards } from '@nestjs/common';
+import { AuthGuard } from '@nestjs/passport';
+import { PermissionsGuard } from '../../common/guards/permissions.guard';
+import { Permissions } from '../../common/decorators/permissions.decorator';
 import { PrismaService } from '../../prisma/prisma.service';
 import { existsSync, writeFileSync, unlinkSync } from 'fs';
 import { join, resolve } from 'path';
@@ -16,12 +17,49 @@ function formatBytes(bytes: number): string {
 @Controller('health')
 export class HealthController {
   constructor(
-    private readonly jwtService: JwtService,
     private readonly prisma: PrismaService,
   ) {}
 
+  /**
+   * GET /api/v1/health
+   * Public endpoint for status checks (uptime, version, status)
+   */
   @Get()
   async getHealth() {
+    // Light check database connectivity
+    let dbStatus = 'OK';
+    try {
+      await this.prisma.$queryRaw`SELECT 1`;
+    } catch {
+      dbStatus = 'ERROR';
+    }
+
+    if (dbStatus === 'ERROR') {
+      throw new ServiceUnavailableException({
+        status: 'ERROR',
+        database: 'ERROR',
+        uptime: process.uptime(),
+        version: process.env.APP_VERSION || '1.0.0',
+        build: process.env.APP_BUILD || 'production',
+      });
+    }
+
+    return {
+      status: 'OK',
+      uptime: process.uptime(),
+      version: process.env.APP_VERSION || '1.0.0',
+      build: process.env.APP_BUILD || 'production',
+    };
+  }
+
+  /**
+   * GET /api/v1/health/details
+   * Protected detailed diagnostics endpoint for SUPER_ADMIN
+   */
+  @Get('details')
+  @UseGuards(AuthGuard('jwt'), PermissionsGuard)
+  @Permissions('backup.manage')
+  async getHealthDetails() {
     const diagnostics: Record<string, any> = {
       status: 'OK',
       database: 'ERROR',
@@ -29,7 +67,7 @@ export class HealthController {
       backups: 'ERROR',
       diskFree: '-',
       version: process.env.APP_VERSION || '1.0.0',
-      build: process.env.APP_BUILD || 'development',
+      build: process.env.APP_BUILD || 'production',
     };
 
     // 1. Check Database connection
