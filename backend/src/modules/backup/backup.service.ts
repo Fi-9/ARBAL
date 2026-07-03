@@ -80,6 +80,35 @@ function findPgDumpOnWindows(): string | null {
   return null;
 }
 
+function findPsqlOnWindows(): string | null {
+  const commonDirs = [
+    'C:\\Program Files\\PostgreSQL',
+    'C:\\Program Files (x86)\\PostgreSQL',
+    'C:\\Program Files\\pgAdmin 4',
+    'C:\\Program Files (x86)\\pgAdmin 4'
+  ];
+
+  for (const baseDir of commonDirs) {
+    if (!existsSync(baseDir)) continue;
+    try {
+      const runtimePath = resolve(baseDir, 'runtime', 'psql.exe');
+      if (existsSync(runtimePath)) return runtimePath;
+
+      const subDirs = readdirSync(baseDir);
+      for (const subDir of subDirs) {
+        const binPath = resolve(baseDir, subDir, 'bin', 'psql.exe');
+        if (existsSync(binPath)) return binPath;
+
+        const runtimeSubPath = resolve(baseDir, subDir, 'runtime', 'psql.exe');
+        if (existsSync(runtimeSubPath)) return runtimeSubPath;
+      }
+    } catch (e) {
+      // Ignore
+    }
+  }
+  return null;
+}
+
 function escapeSqlValue(val: any): string {
   if (val === null || val === undefined) {
     return 'NULL';
@@ -695,8 +724,18 @@ Gunakan utilitas CLI pg_restore/psql untuk memulihkan database.sql, dan salin/ek
 
       // 2. Restore database via psql
       this.logger.log('Restoring database from SQL dump...');
+      let psqlExecutable = process.env.PSQL_PATH || 'psql';
+      if (process.platform === 'win32' && psqlExecutable === 'psql') {
+        const detectedPath = findPsqlOnWindows();
+        if (detectedPath) {
+          psqlExecutable = detectedPath;
+          this.logger.log(`Auto-detected psql path on Windows: "${psqlExecutable}"`);
+        } else {
+          this.logger.warn('psql executable not found in common Windows directories. Will try calling "psql" from PATH.');
+        }
+      }
       try {
-        await execFileAsync('psql', ['-d', dbUrl, '-f', sqlPath], {
+        await execFileAsync(psqlExecutable, ['-d', dbUrl, '-f', sqlPath], {
           maxBuffer: 100 * 1024 * 1024,
         });
       } catch (psqlError: any) {
