@@ -109,6 +109,69 @@ function findPsqlOnWindows(): string | null {
   return null;
 }
 
+function parseSqlDump(sqlContent: string): string[] {
+  const lines = sqlContent.split(/\r?\n/);
+  const statements: string[] = [];
+  
+  let inCopyMode = false;
+  let copyTable = '';
+  let copyColumns: string[] = [];
+  
+  for (const line of lines) {
+    const trimmed = line.trim();
+    
+    if (!inCopyMode && (trimmed === '' || trimmed.startsWith('--') || trimmed.startsWith('/*'))) {
+      continue;
+    }
+    
+    if (inCopyMode) {
+      if (trimmed === '\\.') {
+        inCopyMode = false;
+        continue;
+      }
+      
+      const rawValues = line.split('\t');
+      const values = rawValues.map((val) => {
+        if (val === '\\N') {
+          return 'NULL';
+        }
+        
+        let unescaped = '';
+        for (let i = 0; i < val.length; i++) {
+          if (val[i] === '\\' && i + 1 < val.length) {
+            const next = val[i + 1];
+            if (next === 't') unescaped += '\t';
+            else if (next === 'n') unescaped += '\n';
+            else if (next === 'r') unescaped += '\r';
+            else if (next === '\\') unescaped += '\\';
+            else unescaped += next;
+            i++;
+          } else {
+            unescaped += val[i];
+          }
+        }
+        return `'${unescaped.replace(/'/g, "''")}'`;
+      });
+      
+      statements.push(`INSERT INTO ${copyTable} (${copyColumns.join(', ')}) VALUES (${values.join(', ')})`);
+    } else {
+      const copyMatch = line.match(/^COPY\s+(?:\w+\.)?"?(\w+)"?\s*\(([^)]+)\)\s*FROM\s+stdin;/i);
+      if (copyMatch) {
+        inCopyMode = true;
+        copyTable = `"${copyMatch[1]}"`;
+        copyColumns = copyMatch[2].split(',').map(c => c.trim());
+      } else if (trimmed.endsWith(';')) {
+        const upper = trimmed.toUpperCase();
+        if (!upper.startsWith('SET ')) {
+          statements.push(trimmed);
+        }
+      }
+    }
+  }
+  
+  return statements;
+}
+
 function splitSqlStatements(sql: string): string[] {
   const statements: string[] = [];
   let current = '';
@@ -244,6 +307,7 @@ export class BackupService {
     const documentRequirements = await this.prisma.documentRequirement.findMany();
     const systemSettings = await this.prisma.systemSetting.findMany();
     const sequences = await this.prisma.sequence.findMany();
+    const classes = await this.prisma.class.findMany();
 
     let sql = '';
     sql += '-- ARBAL Database Backup SQL (Generated via Prisma Client fallback)\n';
@@ -268,6 +332,7 @@ export class BackupService {
       'DocumentRequirement',
       'SystemSetting',
       'Sequence',
+      'Class',
     ];
 
     for (const table of tables) {
@@ -294,6 +359,7 @@ export class BackupService {
     sql += buildInsertsForModel('DocumentRequirement', documentRequirements);
     sql += buildInsertsForModel('SystemSetting', systemSettings);
     sql += buildInsertsForModel('Sequence', sequences);
+    sql += buildInsertsForModel('Class', classes);
 
     // Re-enable triggers and constraints
     sql += 'SET session_replication_role = \'origin\';\n';
@@ -777,22 +843,8 @@ Gunakan utilitas CLI pg_restore/psql untuk memulihkan database.sql, dan salin/ek
       if (isPrismaFallback) {
         this.logger.log('Detected programmatic Prisma fallback SQL dump. Restoring via Prisma Client...');
         try {
-          const statements = splitSqlStatements(sqlContent);
-          this.logger.log(`Parsed ${statements.length} SQL statements. Executing database restore transaction...`);
-          
-          await this.prisma.$transaction(
-            async (tx) => {
-              for (const stmt of statements) {
-                await tx.$executeRawUnsafe(stmt);
-              }
-            },
-            {
-              timeout: 180000, // 3 minutes timeout for large datasets
-            }
-          );
-          this.logger.log('Programmatic database restore completed successfully.');
+          await this.restoreSqlProgrammatically(sqlContent);
         } catch (restoreError: any) {
-          this.logger.error(`Programmatic restore failed: ${restoreError.message}`, restoreError.stack);
           throw new InternalServerErrorException(`Programmatic restore failed: ${restoreError.message}`);
         }
       } else {
@@ -806,13 +858,29 @@ Gunakan utilitas CLI pg_restore/psql untuk memulihkan database.sql, dan salin/ek
             this.logger.warn('psql executable not found in common Windows directories. Will try calling "psql" from PATH.');
           }
         }
+        
+        let psqlSuccess = false;
         try {
+          this.logger.log(`Attempting database restore via psql executable: "${psqlExecutable}"`);
           await execFileAsync(psqlExecutable, ['-d', dbUrl, '-f', sqlPath], {
             maxBuffer: 100 * 1024 * 1024,
           });
+          psqlSuccess = true;
+          this.logger.log('psql restore completed successfully.');
         } catch (psqlError: any) {
-          this.logger.error(`psql restore failed: ${psqlError.message}`, psqlError.stack);
-          throw new InternalServerErrorException(`psql restore failed: ${psqlError.message}. Make sure psql is in PATH.`);
+          this.logger.warn(`psql restore failed: ${psqlError.message}. Falling back to programmatic SQL parsing and restore via Prisma...`);
+        }
+
+        if (!psqlSuccess) {
+          try {
+            await this.restoreSqlProgrammatically(sqlContent);
+            this.logger.log('Programmatic restore fallback completed successfully.');
+          } catch (fallbackError: any) {
+            this.logger.error(`Programmatic restore fallback failed: ${fallbackError.message}`, fallbackError.stack);
+            throw new InternalServerErrorException(
+              `Database restore failed: psql execution failed, and programmatic restore fallback also failed: ${fallbackError.message}`
+            );
+          }
         }
       }
 
@@ -924,6 +992,69 @@ Gunakan utilitas CLI pg_restore/psql untuk memulihkan database.sql, dan salin/ek
       });
     } catch (err: any) {
       this.logger.warn(`Failed to write audit log for ${action}: ${err.message}`);
+    }
+  }
+
+  async restoreSqlProgrammatically(sqlContent: string): Promise<void> {
+    const rawStatements = parseSqlDump(sqlContent);
+    const dmlStatements = rawStatements.filter(stmt => {
+      const s = stmt.toUpperCase();
+      return s.startsWith('INSERT') || s.includes('SETVAL');
+    });
+
+    this.logger.log(`Parsed ${rawStatements.length} total statements. Filtered to ${dmlStatements.length} data/sequence statements.`);
+
+    // Truncate tables to clean up before restore
+    const tables = [
+      'StudentNote',
+      'StudentStatusHistory',
+      'StudentTimeline',
+      'RefreshToken',
+      'ActivityLog',
+      'Document',
+      'Guardian',
+      'Student',
+      'User',
+      'AcademicYear',
+      'Role',
+      'DocumentRequirement',
+      'SystemSetting',
+      'Sequence',
+      'Class',
+    ];
+
+    await this.prisma.$executeRawUnsafe("SET session_replication_role = 'replica'");
+    for (const table of tables) {
+      try {
+        await this.prisma.$executeRawUnsafe(`TRUNCATE TABLE "${table}" CASCADE`);
+        this.logger.log(`Truncated table: ${table}`);
+      } catch (e: any) {
+        this.logger.warn(`Error truncating table ${table}: ${e.message}`);
+      }
+    }
+
+    this.logger.log('Executing database restore statements inside a transaction...');
+    try {
+      await this.prisma.$transaction(
+        async (tx) => {
+          // Disable triggers inside transaction for safety
+          await tx.$executeRawUnsafe("SET session_replication_role = 'replica'");
+          for (const stmt of dmlStatements) {
+            await tx.$executeRawUnsafe(stmt);
+          }
+          await tx.$executeRawUnsafe("SET session_replication_role = 'origin'");
+        },
+        {
+          timeout: 180000, // 3 minutes
+        }
+      );
+      this.logger.log('Programmatic restore completed successfully.');
+    } catch (err: any) {
+      this.logger.error(`Transaction failed: ${err.message}`, err.stack);
+      try {
+        await this.prisma.$executeRawUnsafe("SET session_replication_role = 'origin'");
+      } catch {}
+      throw err;
     }
   }
 
