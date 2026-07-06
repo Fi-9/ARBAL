@@ -104,7 +104,9 @@ export default function BackupRestoreView() {
   // Restore backup mutation
   const restoreBackupMutation = useMutation({
     mutationFn: async (fileName: string) => {
-      const response = await api.post(`/backup/restore/${fileName}`);
+      const response = await api.post(`/backup/restore/${fileName}`, null, {
+        timeout: 180000, // 3 minutes timeout for restore execution
+      });
       return response.data;
     },
     onSuccess: () => {
@@ -125,6 +127,7 @@ export default function BackupRestoreView() {
         headers: {
           'Content-Type': 'multipart/form-data',
         },
+        timeout: 180000, // 3 minutes timeout for upload and restore execution
       });
       return response.data;
     },
