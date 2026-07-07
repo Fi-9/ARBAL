@@ -169,6 +169,13 @@ npx prisma migrate dev
 ### 3. Keamanan Restorasi Backup
 * **PENTING**: Melakukan pemulihan data (*restore*) dari berkas cadangan ZIP akan **MENGGANTI secara permanen** database PostgreSQL aktif dan menghapus direktori berkas `/uploads` saat ini dengan data yang ada di dalam ZIP.
 * Pastikan untuk melakukan backup manual tambahan sebelum melakukan restore data di lingkungan produksi.
+* Endpoint HTTP restore dinonaktifkan secara default melalui `ALLOW_BACKUP_RESTORE=false`. Prosedur restore sebaiknya dijalankan lewat CLI/SOP administratif selama maintenance window yang terkontrol.
+* Sebelum arsip ZIP diizinkan diproses restore, backend kini memverifikasi struktur entry, menolak path traversal, dan membatasi total ukuran ekstraksi.
+* Restore database kini mengandalkan `psql` dengan mode fail-fast (`ON_ERROR_STOP`) dan single transaction. Fallback restore programatik dinonaktifkan untuk mencegah state database setengah pulih.
+* Restore `uploads` kini memakai snapshot rollback sementara: backend menyiapkan kandidat restore dan snapshot `uploads` aktif terlebih dahulu, lalu mengembalikan snapshot lama jika copy akhir gagal.
+* Backup baru kini membawa `manifest.json` berisi checksum SHA-256 untuk `database.sql`, `metadata.json`, `README.txt`, dan berkas `uploads/*` sehingga verifikasi backup dapat mendeteksi korupsi atau mismatch isi sebelum restore dipakai.
+* SOP operasional restore ada di [docs/RESTORE_SOP.md](/C:/Users/renre/Downloads/ARBAL/docs/RESTORE_SOP.md:1).
+* Smoke test guard restore tersedia lewat `npm run test:restore-guards` dari root project.
 
 ### 4. Batasan Akses Guru
 * Hak akses `GURU` dibatasi ketat pada backend gateway (`jwt.strategy.ts`) dan frontend UI. Setiap panggilan API mutasi (unggah, hapus, tambah, atau konfigurasi) oleh token pengguna dengan peran Guru akan ditolak dengan respons HTTP `403 Forbidden`.

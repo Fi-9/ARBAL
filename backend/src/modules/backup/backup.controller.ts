@@ -5,10 +5,12 @@ import {
   Delete,
   Param,
   Req,
+  Body,
   UseGuards,
   Res,
   UseInterceptors,
   UploadedFile,
+  ForbiddenException,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { AuthGuard } from '@nestjs/passport';
@@ -24,6 +26,15 @@ import { PermissionsGuard } from '../../common/guards/permissions.guard';
 @UseGuards(AuthGuard('jwt'), PermissionsGuard)
 export class BackupController {
   constructor(private backupService: BackupService) {}
+
+  private async assertRestoreEnabled(req: any, target: string) {
+    const allowed = await this.backupService.assertRestoreApiEnabled(req?.user?.id, target);
+    if (!allowed) {
+      throw new ForbiddenException(
+        'Restore API dinonaktifkan pada lingkungan ini. Gunakan prosedur CLI atau SOP administratif.',
+      );
+    }
+  }
 
   /**
    * POST /api/v1/backup — manual backup trigger
@@ -82,10 +93,20 @@ export class BackupController {
   }
 
   @Post('restore/:fileName')
-  @Permissions('backup.manage')
+  @Permissions('restore.manage')
   @ApiOperation({ summary: 'Restore database and uploads from a backup file' })
-  async restore(@Param('fileName') fileName: string, @Req() req: any) {
-    return this.backupService.restoreFromBackup(fileName, req.user.id);
+  @ApiBody({
+    schema: {
+      type: 'object',
+      required: ['reason'],
+      properties: {
+        reason: { type: 'string', minLength: 10 },
+      },
+    },
+  })
+  async restore(@Param('fileName') fileName: string, @Body('reason') reason: string, @Req() req: any) {
+    await this.assertRestoreEnabled(req, fileName);
+    return this.backupService.restoreFromBackup(fileName, req.user.id, reason);
   }
 
   /**
@@ -93,7 +114,7 @@ export class BackupController {
    * WARNING: This will replace current data!
    */
   @Post('upload-restore')
-  @Permissions('backup.manage')
+  @Permissions('restore.manage')
   @UseInterceptors(
     FileInterceptor('file', {
       limits: {
@@ -106,13 +127,16 @@ export class BackupController {
   @ApiBody({
     schema: {
       type: 'object',
+      required: ['file', 'reason'],
       properties: {
         file: { type: 'string', format: 'binary' },
+        reason: { type: 'string', minLength: 10 },
       },
     },
   })
-  async uploadAndRestore(@UploadedFile() file: Express.Multer.File, @Req() req: any) {
-    return this.backupService.uploadAndRestoreBackup(file, req.user.id);
+  async uploadAndRestore(@UploadedFile() file: Express.Multer.File, @Body('reason') reason: string, @Req() req: any) {
+    await this.assertRestoreEnabled(req, file?.originalname ?? 'uploaded-file');
+    return this.backupService.uploadAndRestoreBackup(file, req.user.id, reason);
   }
 
   /**

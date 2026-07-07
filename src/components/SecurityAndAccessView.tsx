@@ -37,6 +37,7 @@ const PERMISSION_ROW_KEYS: Record<string, string[]> = {
   'Verifikasi dokumen': ['document.verify'],
   'Kelola akun dan peran': ['user.manage', 'role.manage'],
   'Lihat audit log penuh': ['logs.view'],
+  'Pulihkan backup dan data': ['restore.manage'],
 };
 
 export default function SecurityAndAccessView({

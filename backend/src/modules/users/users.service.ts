@@ -236,7 +236,7 @@ export class UsersService {
         'document.read', 'document.upload', 'document.delete', 'document.verify',
         'role.manage', 'user.manage',
         'logs.view', 'dashboard.view', 'report.export', 'document.download',
-        'backup.manage',
+        'backup.manage', 'restore.manage',
       ],
       GURU: [
         'student.read',

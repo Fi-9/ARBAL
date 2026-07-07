@@ -18,9 +18,9 @@ export class CreateUserDto {
   @MaxLength(128)
   password: string;
 
-  @ApiProperty({ example: 'GURU', enum: ['SUPER_ADMIN', 'GURU'] })
+  @ApiProperty({ example: 'GURU', enum: ['SUPER_ADMIN', 'GURU', 'KEPALA_SEKOLAH', 'TATA_USAHA'] })
   @IsString()
-  @IsIn(['SUPER_ADMIN', 'GURU'])
+  @IsIn(['SUPER_ADMIN', 'GURU', 'KEPALA_SEKOLAH', 'TATA_USAHA'])
   roleName: string;
 }
 
@@ -37,10 +37,10 @@ export class UpdateUserDto {
   @MaxLength(255)
   email?: string;
 
-  @ApiPropertyOptional({ example: 'GURU', enum: ['SUPER_ADMIN', 'GURU'] })
+  @ApiPropertyOptional({ example: 'GURU', enum: ['SUPER_ADMIN', 'GURU', 'KEPALA_SEKOLAH', 'TATA_USAHA'] })
   @IsOptional()
   @IsString()
-  @IsIn(['SUPER_ADMIN', 'GURU'])
+  @IsIn(['SUPER_ADMIN', 'GURU', 'KEPALA_SEKOLAH', 'TATA_USAHA'])
   roleName?: string;
 
   @ApiPropertyOptional({ example: true })

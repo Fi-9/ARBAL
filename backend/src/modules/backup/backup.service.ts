@@ -4,15 +4,19 @@ import { Cron } from '@nestjs/schedule';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { ZipArchive } from 'archiver';
-import { createWriteStream, existsSync, mkdirSync, readdirSync, statSync, unlinkSync, writeFileSync, readFileSync } from 'fs';
+import { cpSync, createWriteStream, existsSync, mkdirSync, mkdtempSync, readdirSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync, readFileSync } from 'fs';
 import { basename, isAbsolute, relative, resolve } from 'path';
+import { createHash } from 'crypto';
+import { inflateRawSync } from 'zlib';
 
 const execFileAsync = promisify(execFile);
 
 const BACKUPS_DIR = resolve(__dirname, '..', '..', '..', 'backups');
 const UPLOADS_DIR = resolve(__dirname, '..', '..', '..', 'uploads');
 const DB_ONLY_BACKUPS_DIR = resolve(BACKUPS_DIR, 'db-only');
+const BACKUP_STAGING_DIR = resolve(BACKUPS_DIR, 'staging');
 const MAX_DB_ONLY_BACKUPS = 50;
+const REQUIRED_BACKUP_ENTRIES = new Set(['database.sql', 'metadata.json', 'README.txt', 'manifest.json']);
 function getMaxBackups(): number {
   const val = process.env.MAX_BACKUPS;
   return val ? parseInt(val, 10) : 30;
@@ -23,7 +27,55 @@ function getRetentionDays(): number {
   return val ? parseInt(val, 10) : 90;
 }
 
+function isRestoreApiEnabled(): boolean {
+  return process.env.ALLOW_BACKUP_RESTORE === 'true';
+}
+
+function getMaxRestoreEntries(): number {
+  const val = process.env.MAX_BACKUP_RESTORE_ENTRIES;
+  return val ? parseInt(val, 10) : 5000;
+}
+
+function getMaxUncompressedRestoreBytes(): number {
+  const mb = process.env.MAX_BACKUP_UNCOMPRESSED_MB;
+  const parsed = mb ? parseInt(mb, 10) : 512;
+  return parsed * 1024 * 1024;
+}
+
 const BACKUP_FILE_PATTERN = /^.+\.zip$/i;
+
+type ZipEntryInfo = {
+  name: string;
+  compressedSize: number;
+  uncompressedSize: number;
+  isDirectory: boolean;
+  compressionMethod: number;
+  localHeaderOffset: number;
+};
+
+type BackupMetadata = {
+  version?: string;
+  created_at?: string;
+  total_students?: number;
+  total_documents?: number;
+  database?: string;
+  tag?: string;
+  backup_format?: string;
+  sql_dump_source?: string;
+  generator_version?: string;
+};
+
+type BackupManifestEntry = {
+  sha256: string;
+  size: number;
+};
+
+type BackupManifest = {
+  version: string;
+  algorithm: 'sha256';
+  generated_at: string;
+  entries: Record<string, BackupManifestEntry>;
+};
 
 function ensureInsideDirectory(directory: string, candidatePath: string): void {
   const relativePath = relative(directory, candidatePath);
@@ -43,6 +95,184 @@ function resolveBackupFile(fileName: string): string {
   const filePath = resolve(BACKUPS_DIR, fileName);
   ensureInsideDirectory(BACKUPS_DIR, filePath);
   return filePath;
+}
+
+function normalizeZipEntryName(rawName: string): string {
+  return rawName.replace(/\\/g, '/');
+}
+
+function validateZipEntryName(name: string): void {
+  if (!name || name.includes('\0')) {
+    throw new BadRequestException('Backup archive contains an invalid empty entry');
+  }
+
+  if (name.startsWith('/') || /^[A-Za-z]:\//.test(name)) {
+    throw new BadRequestException(`Backup archive contains an absolute path entry: ${name}`);
+  }
+
+  const parts = name.split('/').filter(Boolean);
+  if (parts.some((part) => part === '.' || part === '..')) {
+    throw new BadRequestException(`Backup archive contains a traversal entry: ${name}`);
+  }
+}
+
+function isAllowedBackupEntry(name: string): boolean {
+  return REQUIRED_BACKUP_ENTRIES.has(name) || name === 'uploads/' || name.startsWith('uploads/');
+}
+
+function parseZipEntries(buffer: Buffer): ZipEntryInfo[] {
+  const minEocdSize = 22;
+  const maxCommentLength = 0xffff;
+  const searchStart = Math.max(0, buffer.length - (minEocdSize + maxCommentLength));
+
+  let eocdOffset = -1;
+  for (let i = buffer.length - minEocdSize; i >= searchStart; i--) {
+    if (buffer.readUInt32LE(i) === 0x06054b50) {
+      eocdOffset = i;
+      break;
+    }
+  }
+
+  if (eocdOffset === -1) {
+    throw new BadRequestException('Backup archive is not a valid ZIP file');
+  }
+
+  const totalEntries = buffer.readUInt16LE(eocdOffset + 10);
+  const centralDirectorySize = buffer.readUInt32LE(eocdOffset + 12);
+  const centralDirectoryOffset = buffer.readUInt32LE(eocdOffset + 16);
+
+  if (
+    totalEntries === 0xffff ||
+    centralDirectorySize === 0xffffffff ||
+    centralDirectoryOffset === 0xffffffff
+  ) {
+    throw new BadRequestException('ZIP64 backup archives are not supported for restore');
+  }
+
+  const entries: ZipEntryInfo[] = [];
+  let offset = centralDirectoryOffset;
+
+  for (let i = 0; i < totalEntries; i++) {
+    if (offset + 46 > buffer.length || buffer.readUInt32LE(offset) !== 0x02014b50) {
+      throw new BadRequestException('Backup archive central directory is corrupt');
+    }
+
+    const flags = buffer.readUInt16LE(offset + 8);
+    const compressionMethod = buffer.readUInt16LE(offset + 10);
+    const compressedSize = buffer.readUInt32LE(offset + 20);
+    const uncompressedSize = buffer.readUInt32LE(offset + 24);
+    const fileNameLength = buffer.readUInt16LE(offset + 28);
+    const extraLength = buffer.readUInt16LE(offset + 30);
+    const commentLength = buffer.readUInt16LE(offset + 32);
+
+    const fileNameStart = offset + 46;
+    const fileNameEnd = fileNameStart + fileNameLength;
+    if (fileNameEnd > buffer.length) {
+      throw new BadRequestException('Backup archive entry name is truncated');
+    }
+
+    const rawName = buffer
+      .slice(fileNameStart, fileNameEnd)
+      .toString((flags & 0x0800) !== 0 ? 'utf8' : 'utf8');
+    const name = normalizeZipEntryName(rawName);
+
+    entries.push({
+      name,
+      compressedSize,
+      uncompressedSize,
+      isDirectory: name.endsWith('/'),
+      compressionMethod,
+      localHeaderOffset: buffer.readUInt32LE(offset + 42),
+    });
+
+    offset = fileNameEnd + extraLength + commentLength;
+  }
+
+  return entries;
+}
+
+function parseBackupMetadata(raw: string): BackupMetadata {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new BadRequestException('Backup metadata.json is not valid JSON');
+  }
+
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new BadRequestException('Backup metadata.json must contain an object');
+  }
+
+  const metadata = parsed as BackupMetadata;
+  if (metadata.database && metadata.database !== 'postgresql') {
+    throw new BadRequestException(`Unsupported backup database type: ${metadata.database}`);
+  }
+
+  if (metadata.backup_format && metadata.backup_format !== 'zip+plain-sql') {
+    throw new BadRequestException(`Unsupported backup format: ${metadata.backup_format}`);
+  }
+
+  return metadata;
+}
+
+function hashBufferSha256(buffer: Buffer): string {
+  return createHash('sha256').update(buffer).digest('hex');
+}
+
+function parseBackupManifest(raw: string): BackupManifest {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new BadRequestException('Backup manifest.json is not valid JSON');
+  }
+
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new BadRequestException('Backup manifest.json must contain an object');
+  }
+
+  const manifest = parsed as BackupManifest;
+  if (manifest.algorithm !== 'sha256') {
+    throw new BadRequestException(`Unsupported backup manifest algorithm: ${manifest.algorithm}`);
+  }
+  if (!manifest.entries || typeof manifest.entries !== 'object' || Array.isArray(manifest.entries)) {
+    throw new BadRequestException('Backup manifest.json must contain an entries object');
+  }
+
+  return manifest;
+}
+
+function normalizeRestoreReason(reason: string | undefined | null): string {
+  const trimmed = (reason ?? '').trim();
+  if (trimmed.length < 10) {
+    throw new BadRequestException('Restore reason is required and must be at least 10 characters');
+  }
+  return trimmed;
+}
+
+function extractZipEntryBuffer(buffer: Buffer, entry: ZipEntryInfo): Buffer {
+  const offset = entry.localHeaderOffset;
+  if (offset + 30 > buffer.length || buffer.readUInt32LE(offset) !== 0x04034b50) {
+    throw new BadRequestException(`Backup archive local header is corrupt for entry: ${entry.name}`);
+  }
+
+  const fileNameLength = buffer.readUInt16LE(offset + 26);
+  const extraLength = buffer.readUInt16LE(offset + 28);
+  const dataStart = offset + 30 + fileNameLength + extraLength;
+  const dataEnd = dataStart + entry.compressedSize;
+  if (dataEnd > buffer.length) {
+    throw new BadRequestException(`Backup archive entry payload is truncated: ${entry.name}`);
+  }
+
+  const compressed = buffer.slice(dataStart, dataEnd);
+  if (entry.compressionMethod === 0) {
+    return compressed;
+  }
+  if (entry.compressionMethod === 8) {
+    return inflateRawSync(compressed);
+  }
+
+  throw new BadRequestException(`Unsupported ZIP compression method ${entry.compressionMethod} for entry: ${entry.name}`);
 }
 
 function quotePowerShellLiteral(value: string): string {
@@ -109,68 +339,6 @@ function findPsqlOnWindows(): string | null {
   return null;
 }
 
-function parseSqlDump(sqlContent: string): string[] {
-  const lines = sqlContent.split(/\r?\n/);
-  const statements: string[] = [];
-  
-  let inCopyMode = false;
-  let copyTable = '';
-  let copyColumns: string[] = [];
-  
-  for (const line of lines) {
-    const trimmed = line.trim();
-    
-    if (!inCopyMode && (trimmed === '' || trimmed.startsWith('--') || trimmed.startsWith('/*'))) {
-      continue;
-    }
-    
-    if (inCopyMode) {
-      if (trimmed === '\\.') {
-        inCopyMode = false;
-        continue;
-      }
-      
-      const rawValues = line.split('\t');
-      const values = rawValues.map((val) => {
-        if (val === '\\N') {
-          return 'NULL';
-        }
-        
-        let unescaped = '';
-        for (let i = 0; i < val.length; i++) {
-          if (val[i] === '\\' && i + 1 < val.length) {
-            const next = val[i + 1];
-            if (next === 't') unescaped += '\t';
-            else if (next === 'n') unescaped += '\n';
-            else if (next === 'r') unescaped += '\r';
-            else if (next === '\\') unescaped += '\\';
-            else unescaped += next;
-            i++;
-          } else {
-            unescaped += val[i];
-          }
-        }
-        return `'${unescaped.replace(/'/g, "''")}'`;
-      });
-      
-      statements.push(`INSERT INTO ${copyTable} (${copyColumns.join(', ')}) VALUES (${values.join(', ')})`);
-    } else {
-      const copyMatch = line.match(/^COPY\s+(?:\w+\.)?"?(\w+)"?\s*\(([^)]+)\)\s*FROM\s+stdin;/i);
-      if (copyMatch) {
-        inCopyMode = true;
-        copyTable = `"${copyMatch[1]}"`;
-        copyColumns = copyMatch[2].split(',').map(c => c.trim());
-      } else if (trimmed.endsWith(';')) {
-        const upper = trimmed.toUpperCase();
-        if (!upper.startsWith('SET ')) {
-          statements.push(trimmed);
-        }
-      }
-    }
-  }
-  
-  return statements;
-}
 
 function splitSqlStatements(sql: string): string[] {
   const statements: string[] = [];
@@ -290,6 +458,170 @@ export class BackupService {
     if (!existsSync(BACKUPS_DIR)) {
       mkdirSync(BACKUPS_DIR, { recursive: true });
     }
+    if (!existsSync(BACKUP_STAGING_DIR)) {
+      mkdirSync(BACKUP_STAGING_DIR, { recursive: true });
+    }
+  }
+
+  async assertRestoreApiEnabled(actorUserId?: string, target?: string): Promise<boolean> {
+    if (isRestoreApiEnabled()) {
+      return true;
+    }
+
+    const suffix = target ? ` (target: ${target})` : '';
+    this.logger.warn(
+      `[Backup] Blocked restore API attempt by actor ${actorUserId ?? 'unknown'}${suffix} because ALLOW_BACKUP_RESTORE is disabled.`,
+    );
+
+    if (actorUserId) {
+      await this.auditLog(
+        actorUserId,
+        'BACKUP_RESTORE_BLOCKED',
+        target ?? 'restore',
+        `Blocked restore API attempt while ALLOW_BACKUP_RESTORE=false${suffix}`,
+      );
+    }
+
+    return false;
+  }
+
+  private inspectBackupArchiveBuffer(buffer: Buffer): ZipEntryInfo[] {
+    const entries = parseZipEntries(buffer);
+    if (entries.length === 0) {
+      throw new BadRequestException('Backup archive is empty');
+    }
+
+    const maxEntries = getMaxRestoreEntries();
+    if (entries.length > maxEntries) {
+      throw new BadRequestException(`Backup archive contains too many entries (${entries.length}/${maxEntries})`);
+    }
+
+    const seenEntries = new Set<string>();
+    let totalUncompressedSize = 0;
+
+    for (const entry of entries) {
+      validateZipEntryName(entry.name);
+
+      if (!isAllowedBackupEntry(entry.name)) {
+        throw new BadRequestException(`Backup archive contains a forbidden entry: ${entry.name}`);
+      }
+
+      if (seenEntries.has(entry.name)) {
+        throw new BadRequestException(`Backup archive contains a duplicate entry: ${entry.name}`);
+      }
+      seenEntries.add(entry.name);
+
+      totalUncompressedSize += entry.uncompressedSize;
+      if (totalUncompressedSize > getMaxUncompressedRestoreBytes()) {
+        throw new BadRequestException('Backup archive exceeds the configured restore extraction limit');
+      }
+    }
+
+    for (const requiredEntry of REQUIRED_BACKUP_ENTRIES) {
+      if (!seenEntries.has(requiredEntry)) {
+        throw new BadRequestException(`Backup archive is missing a required entry: ${requiredEntry}`);
+      }
+    }
+
+    return entries;
+  }
+
+  private inspectBackupArchiveFile(filePath: string): { buffer: Buffer; entries: ZipEntryInfo[] } {
+    const buffer = readFileSync(filePath);
+    const entries = this.inspectBackupArchiveBuffer(buffer);
+    return { buffer, entries };
+  }
+
+  private validateBackupMetadataBuffer(buffer: Buffer, entries: ZipEntryInfo[]): BackupMetadata {
+    const metadataEntry = entries.find((entry) => entry.name === 'metadata.json');
+    if (!metadataEntry) {
+      throw new BadRequestException('Backup metadata.json is missing from the archive');
+    }
+
+    const metadataBuffer = extractZipEntryBuffer(buffer, metadataEntry);
+    return parseBackupMetadata(metadataBuffer.toString('utf-8'));
+  }
+
+  private validateBackupManifestBuffer(buffer: Buffer, entries: ZipEntryInfo[]): BackupManifest {
+    const manifestEntry = entries.find((entry) => entry.name === 'manifest.json');
+    if (!manifestEntry) {
+      throw new BadRequestException('Backup manifest.json is missing from the archive');
+    }
+
+    const manifestBuffer = extractZipEntryBuffer(buffer, manifestEntry);
+    const manifest = parseBackupManifest(manifestBuffer.toString('utf-8'));
+
+    const actualFileEntries = entries.filter(
+      (entry) => !entry.isDirectory && entry.name !== 'manifest.json',
+    );
+
+    for (const entry of actualFileEntries) {
+      const manifestItem = manifest.entries[entry.name];
+      if (!manifestItem) {
+        throw new BadRequestException(`Backup manifest is missing an entry for ${entry.name}`);
+      }
+
+      const payload = extractZipEntryBuffer(buffer, entry);
+      const actualHash = hashBufferSha256(payload);
+      if (manifestItem.sha256 !== actualHash) {
+        throw new BadRequestException(`Backup checksum mismatch detected for ${entry.name}`);
+      }
+      if (manifestItem.size !== payload.length) {
+        throw new BadRequestException(`Backup size mismatch detected for ${entry.name}`);
+      }
+    }
+
+    for (const manifestName of Object.keys(manifest.entries)) {
+      if (!actualFileEntries.find((entry) => entry.name === manifestName)) {
+        throw new BadRequestException(`Backup manifest references a missing archive entry: ${manifestName}`);
+      }
+    }
+
+    return manifest;
+  }
+
+  private ensureBackupArchiveIsSafe(filePath: string): void {
+    const { buffer, entries } = this.inspectBackupArchiveFile(filePath);
+    this.validateBackupMetadataBuffer(buffer, entries);
+    this.validateBackupManifestBuffer(buffer, entries);
+  }
+
+  private createStagingDirectory(prefix: string): string {
+    if (!existsSync(BACKUP_STAGING_DIR)) {
+      mkdirSync(BACKUP_STAGING_DIR, { recursive: true });
+    }
+    return mkdtempSync(resolve(BACKUP_STAGING_DIR, `${prefix}-`));
+  }
+
+  private createSafeUploadedBackupName(originalName: string): string {
+    const sanitized = basename(originalName).replace(/[^A-Za-z0-9._-]/g, '_');
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    return `uploaded-restore-${timestamp}-${sanitized}`;
+  }
+
+  private buildUploadsManifestEntries(dirPath: string, prefix = 'uploads'): Record<string, BackupManifestEntry> {
+    const manifestEntries: Record<string, BackupManifestEntry> = {};
+    if (!existsSync(dirPath)) {
+      return manifestEntries;
+    }
+
+    const children = readdirSync(dirPath);
+    for (const child of children) {
+      const childPath = resolve(dirPath, child);
+      const stats = statSync(childPath);
+      const entryName = `${prefix}/${child}`.replace(/\\/g, '/');
+      if (stats.isDirectory()) {
+        Object.assign(manifestEntries, this.buildUploadsManifestEntries(childPath, entryName));
+      } else {
+        const payload = readFileSync(childPath);
+        manifestEntries[entryName] = {
+          sha256: hashBufferSha256(payload),
+          size: payload.length,
+        };
+      }
+    }
+
+    return manifestEntries;
   }
 
   async generateSqlBackupViaPrisma(): Promise<string> {
@@ -457,22 +789,8 @@ export class BackupService {
     if (!existsSync(filePath)) return false;
 
     try {
-      const isWindows = process.platform === 'win32';
-      let stdout = '';
-      if (isWindows) {
-        const cmd = `[Reflection.Assembly]::LoadWithPartialName('System.IO.Compression.FileSystem'); [System.IO.Compression.ZipFile]::OpenRead(${quotePowerShellLiteral(filePath)}).Entries.FullName`;
-        const res = await execFileAsync('powershell', ['-NoProfile', '-Command', cmd]);
-        stdout = res.stdout;
-      } else {
-        const res = await execFileAsync('unzip', ['-l', filePath]);
-        stdout = res.stdout;
-      }
-
-      const hasSql = stdout.includes('database.sql');
-      const hasMetadata = stdout.includes('metadata.json');
-      const hasReadme = stdout.includes('README.txt');
-
-      return hasSql && hasMetadata && hasReadme;
+      this.ensureBackupArchiveIsSafe(filePath);
+      return true;
     } catch (err: any) {
       this.logger.error(`Failed to verify backup ${fileName}: ${err.message}`);
       return false;
@@ -519,20 +837,8 @@ export class BackupService {
       this.logger.warn(`[Backup] Failed to count students/documents for metadata: ${err.message}`, err.stack);
     }
 
-    // Step 2: Generate metadata.json
-    this.logger.log('[Backup] Step 2/7: Generating metadata.json...');
-    const metadata = {
-      version: '1.0.0',
-      created_at: new Date().toISOString(),
-      total_students: totalStudents,
-      total_documents: totalDocuments,
-      database: 'postgresql',
-      tag,
-    };
-    const metadataString = JSON.stringify(metadata, null, 2);
-
-    // Step 3: Generate README.txt
-    this.logger.log('[Backup] Step 3/7: Generating README.txt...');
+    // Step 2: Prepare README template
+    this.logger.log('[Backup] Step 2/7: Preparing backup metadata payload...');
     const readmeString = `PKBM TEKNOLOGI MUSTAQBAL - ARBAL BACKUP SYSTEM
 ==============================================
 Berkas cadangan (backup) ini dibuat secara otomatis atau manual oleh sistem ARBAL.
@@ -571,6 +877,7 @@ Gunakan utilitas CLI pg_restore/psql untuk memulihkan database.sql, dan salin/ek
     }
 
     let sqlDump: string;
+    let sqlDumpSource: 'pg_dump' | 'prisma-fallback' = 'pg_dump';
     try {
       this.logger.log(`[Backup] Spawning pg_dump process: "${pgDumpExecutable}"`);
       const result = await execFileAsync(pgDumpExecutable, ['-d', dbUrl, '--no-owner', '--no-acl'], {
@@ -584,6 +891,7 @@ Gunakan utilitas CLI pg_restore/psql untuk memulihkan database.sql, dan salin/ek
       this.logger.warn(`[Backup] pg_dump execution failed: ${pgError.message}. Falling back to programmatic database dump via Prisma Client...`);
       try {
         sqlDump = await this.generateSqlBackupViaPrisma();
+        sqlDumpSource = 'prisma-fallback';
         this.logger.log('[Backup] Programmatic database dump fallback completed successfully.');
       } catch (fallbackError: any) {
         this.logger.error(`[Backup] Programmatic database dump fallback failed: ${fallbackError.message}`, fallbackError.stack);
@@ -594,9 +902,46 @@ Gunakan utilitas CLI pg_restore/psql untuk memulihkan database.sql, dan salin/ek
       }
     }
 
-    // Step 5 & 6: Zip uploads and write zip file
-    this.logger.log('[Backup] Step 5/7: Preparing ZIP archive file...');
-    this.logger.log(`[Backup] Step 6/7: Streaming and writing ZIP file to: ${filePath}`);
+    // Step 3: Generate metadata.json after dump source is known
+    this.logger.log('[Backup] Step 3/7: Generating metadata.json...');
+    const metadata: BackupMetadata = {
+      version: '2.0.0',
+      created_at: new Date().toISOString(),
+      total_students: totalStudents,
+      total_documents: totalDocuments,
+      database: 'postgresql',
+      tag,
+      backup_format: 'zip+plain-sql',
+      sql_dump_source: sqlDumpSource,
+      generator_version: '1.0.0',
+    };
+    const metadataString = JSON.stringify(metadata, null, 2);
+
+    const manifest: BackupManifest = {
+      version: '1.0.0',
+      algorithm: 'sha256',
+      generated_at: new Date().toISOString(),
+      entries: {
+        'database.sql': {
+          sha256: hashBufferSha256(Buffer.from(sqlDump, 'utf-8')),
+          size: Buffer.byteLength(sqlDump, 'utf-8'),
+        },
+        'metadata.json': {
+          sha256: hashBufferSha256(Buffer.from(metadataString, 'utf-8')),
+          size: Buffer.byteLength(metadataString, 'utf-8'),
+        },
+        'README.txt': {
+          sha256: hashBufferSha256(Buffer.from(readmeString, 'utf-8')),
+          size: Buffer.byteLength(readmeString, 'utf-8'),
+        },
+        ...this.buildUploadsManifestEntries(UPLOADS_DIR),
+      },
+    };
+    const manifestString = JSON.stringify(manifest, null, 2);
+
+    // Step 4 & 5: Zip uploads and write zip file
+    this.logger.log('[Backup] Step 4/7: Preparing ZIP archive file...');
+    this.logger.log(`[Backup] Step 5/7: Streaming and writing ZIP file to: ${filePath}`);
     try {
       const output = createWriteStream(filePath);
       const archive = new ZipArchive({ zlib: { level: 9 } });
@@ -626,6 +971,9 @@ Gunakan utilitas CLI pg_restore/psql untuk memulihkan database.sql, dan salin/ek
         // Ajouter README.txt
         archive.append(readmeString, { name: 'README.txt' });
 
+        // Ajouter manifest.json
+        archive.append(manifestString, { name: 'manifest.json' });
+
         // Ajouter le répertoire uploads/ (s'il existe)
         if (existsSync(UPLOADS_DIR)) {
           this.logger.log(`[Backup] Packing uploads directory into ZIP: ${UPLOADS_DIR}`);
@@ -654,8 +1002,8 @@ Gunakan utilitas CLI pg_restore/psql untuk memulihkan database.sql, dan salin/ek
 
     const driveFileId = null;
 
-    // Step 7: Save backup record
-    this.logger.log('[Backup] Step 7/7: Creating audit log and database record for the backup operation...');
+    // Step 6: Save backup record
+    this.logger.log('[Backup] Step 6/7: Creating audit log and database record for the backup operation...');
     if (actorUserId) {
       await this.auditLog(actorUserId, 'BACKUP_CREATE', fileName, `Backup created: ${fileName} (${(sizeBytes / 1024 / 1024).toFixed(2)} MB). Contains ${totalStudents} students and ${totalDocuments} documents.`);
     }
@@ -731,6 +1079,98 @@ Gunakan utilitas CLI pg_restore/psql untuk memulihkan database.sql, dan salin/ek
     return size;
   }
 
+  private getDirFileCount(dirPath: string): number {
+    let count = 0;
+    if (!existsSync(dirPath)) return 0;
+    try {
+      const files = readdirSync(dirPath);
+      for (const file of files) {
+        const filePath = resolve(dirPath, file);
+        const stats = statSync(filePath);
+        if (stats.isDirectory()) {
+          count += this.getDirFileCount(filePath);
+        } else {
+          count += 1;
+        }
+      }
+    } catch {
+      // Ignore errors
+    }
+    return count;
+  }
+
+  private restoreUploadsWithRollback(uploadsBackupPath: string): void {
+    const operationDir = this.createStagingDirectory('restore-uploads');
+    ensureInsideDirectory(BACKUP_STAGING_DIR, operationDir);
+
+    const candidateDir = resolve(operationDir, 'candidate-uploads');
+    const rollbackDir = resolve(operationDir, 'rollback-uploads');
+    ensureInsideDirectory(operationDir, candidateDir);
+    ensureInsideDirectory(operationDir, rollbackDir);
+
+    const hadExistingUploads = existsSync(UPLOADS_DIR);
+    const previousSizeBytes = hadExistingUploads ? this.getDirSize(UPLOADS_DIR) : 0;
+    const previousFileCount = hadExistingUploads ? this.getDirFileCount(UPLOADS_DIR) : 0;
+    const candidateSizeBytes = this.getDirSize(uploadsBackupPath);
+    const candidateFileCount = this.getDirFileCount(uploadsBackupPath);
+
+    let liveUploadsReplaced = false;
+
+    try {
+      this.logger.log(
+        `[Backup] Preparing uploads restore candidate: ${candidateFileCount} files, ${(candidateSizeBytes / 1024 / 1024).toFixed(2)} MB`,
+      );
+      cpSync(uploadsBackupPath, candidateDir, { recursive: true });
+
+      if (hadExistingUploads) {
+        this.logger.log(
+          `[Backup] Snapshotting current uploads for rollback: ${previousFileCount} files, ${(previousSizeBytes / 1024 / 1024).toFixed(2)} MB`,
+        );
+        cpSync(UPLOADS_DIR, rollbackDir, { recursive: true });
+      }
+
+      rmSync(UPLOADS_DIR, { recursive: true, force: true });
+      cpSync(candidateDir, UPLOADS_DIR, { recursive: true });
+      liveUploadsReplaced = true;
+
+      const restoredSizeBytes = this.getDirSize(UPLOADS_DIR);
+      const restoredFileCount = this.getDirFileCount(UPLOADS_DIR);
+      this.logger.log(
+        `[Backup] Uploads restore completed: ${restoredFileCount} files, ${(restoredSizeBytes / 1024 / 1024).toFixed(2)} MB`,
+      );
+    } catch (restoreError: any) {
+      this.logger.error(`[Backup] Uploads restore failed: ${restoreError.message}`, restoreError.stack);
+
+      try {
+        rmSync(UPLOADS_DIR, { recursive: true, force: true });
+        if (hadExistingUploads && existsSync(rollbackDir)) {
+          cpSync(rollbackDir, UPLOADS_DIR, { recursive: true });
+          this.logger.warn('[Backup] Uploads rollback completed from snapshot.');
+        } else if (!hadExistingUploads) {
+          mkdirSync(UPLOADS_DIR, { recursive: true });
+          this.logger.warn('[Backup] Uploads rollback restored empty directory state.');
+        }
+      } catch (rollbackError: any) {
+        this.logger.error(
+          `[Backup] Uploads rollback failed after restore error: ${rollbackError.message}`,
+          rollbackError.stack,
+        );
+        throw new InternalServerErrorException(
+          `Uploads restore failed and rollback also failed: ${rollbackError.message}`,
+        );
+      }
+
+      throw new InternalServerErrorException(
+        `Uploads restore failed after database restore completed: ${restoreError.message}`,
+      );
+    } finally {
+      rmSync(operationDir, { recursive: true, force: true });
+      if (!liveUploadsReplaced && !hadExistingUploads && !existsSync(UPLOADS_DIR)) {
+        mkdirSync(UPLOADS_DIR, { recursive: true });
+      }
+    }
+  }
+
   /**
    * Liste tous les backups disponibles
    */
@@ -795,8 +1235,9 @@ Gunakan utilitas CLI pg_restore/psql untuk memulihkan database.sql, dan salin/ek
    *   3. Restore uploads/ directory
    *   4. Cleanup temp files
    */
-  async restoreFromBackup(fileName: string, actorUserId?: string): Promise<{ message: string; restored: string }> {
+  async restoreFromBackup(fileName: string, actorUserId?: string, reason?: string): Promise<{ message: string; restored: string }> {
     const filePath = resolveBackupFile(fileName);
+    const normalizedReason = normalizeRestoreReason(reason);
     if (!existsSync(filePath)) {
       throw new NotFoundException(`Backup file not found: ${fileName}`);
     }
@@ -807,6 +1248,26 @@ Gunakan utilitas CLI pg_restore/psql untuk memulihkan database.sql, dan salin/ek
     ensureInsideDirectory(BACKUPS_DIR, extractDir);
 
     try {
+      this.ensureBackupArchiveIsSafe(filePath);
+
+      // Pre-restore guard: check available disk space
+      const backupSizeBytes = statSync(filePath).size;
+      const estimatedExtractBytes = backupSizeBytes * 3;
+      try {
+        const { statfsSync } = require('fs');
+        const fsStats = statfsSync(BACKUPS_DIR);
+        const freeSpaceBytes = fsStats.bavail * fsStats.bsize;
+        if (freeSpaceBytes < estimatedExtractBytes) {
+          throw new BadRequestException(
+            `Ruang disk tidak cukup untuk restore. Dibutuhkan minimal ${(estimatedExtractBytes / 1024 / 1024).toFixed(0)} MB, tersedia ${(freeSpaceBytes / 1024 / 1024).toFixed(0)} MB.`,
+          );
+        }
+        this.logger.log(`[Restore] Disk space check passed: ${(freeSpaceBytes / 1024 / 1024).toFixed(0)} MB available, ~${(estimatedExtractBytes / 1024 / 1024).toFixed(0)} MB needed.`);
+      } catch (spaceErr: any) {
+        if (spaceErr instanceof BadRequestException) throw spaceErr;
+        this.logger.warn(`[Restore] Disk space check skipped: ${spaceErr.message}`);
+      }
+
       // 1. Extract ZIP
       this.logger.log(`Extracting backup: ${fileName}`);
       mkdirSync(extractDir, { recursive: true });
@@ -835,84 +1296,97 @@ Gunakan utilitas CLI pg_restore/psql untuk memulihkan database.sql, dan salin/ek
         throw new Error('Backup archive does not contain database.sql');
       }
 
+      const metadataPath = resolve(extractDir, 'metadata.json');
+      ensureInsideDirectory(extractDir, metadataPath);
+      if (!existsSync(metadataPath)) {
+        throw new Error('Backup archive does not contain metadata.json');
+      }
+      const metadata = parseBackupMetadata(readFileSync(metadataPath, 'utf-8'));
+      this.logger.log(
+        `Validated backup metadata: version=${metadata.version ?? 'unknown'}, format=${metadata.backup_format ?? 'legacy'}, source=${metadata.sql_dump_source ?? 'unknown'}`,
+      );
+
+      // Pre-restore guard: validate backup format version compatibility
+      const SUPPORTED_BACKUP_VERSIONS = ['2.0.0'];
+      if (metadata.version && !SUPPORTED_BACKUP_VERSIONS.includes(metadata.version)) {
+        throw new BadRequestException(
+          `Versi backup tidak didukung: ${metadata.version}. Versi yang didukung: ${SUPPORTED_BACKUP_VERSIONS.join(', ')}.`,
+        );
+      }
+      if (metadata.database && metadata.database !== 'postgresql') {
+        throw new BadRequestException(
+          `Tipe database backup tidak didukung: ${metadata.database}. Hanya PostgreSQL yang didukung.`,
+        );
+      }
+
       // 2. Restore database
       this.logger.log('Restoring database from SQL dump...');
-      const sqlContent = readFileSync(sqlPath, 'utf-8');
-      const isPrismaFallback = sqlContent.includes('Generated via Prisma Client fallback');
+      let psqlExecutable = process.env.PSQL_PATH || 'psql';
+      if (process.platform === 'win32' && psqlExecutable === 'psql') {
+        const detectedPath = findPsqlOnWindows();
+        if (detectedPath) {
+          psqlExecutable = detectedPath;
+          this.logger.log(`Auto-detected psql path on Windows: "${psqlExecutable}"`);
+        } else {
+          this.logger.warn('psql executable not found in common Windows directories. Will try calling "psql" from PATH.');
+        }
+      }
 
-      if (isPrismaFallback) {
-        this.logger.log('Detected programmatic Prisma fallback SQL dump. Restoring via Prisma Client...');
-        try {
-          await this.restoreSqlProgrammatically(sqlContent);
-        } catch (restoreError: any) {
-          throw new InternalServerErrorException(`Programmatic restore failed: ${restoreError.message}`);
+      const psqlArgs = ['-v', 'ON_ERROR_STOP=1', '-1', '-d', dbUrl, '-f', sqlPath];
+      try {
+        this.logger.log(`Attempting atomic database restore via psql executable: "${psqlExecutable}"`);
+        const result = await execFileAsync(psqlExecutable, psqlArgs, {
+          maxBuffer: 100 * 1024 * 1024,
+          env: { ...process.env, PGPASSWORD: undefined },
+        });
+        if (result.stderr) {
+          this.logger.warn(`[Backup] psql restore stderr: ${result.stderr}`);
         }
-      } else {
-        let psqlExecutable = process.env.PSQL_PATH || 'psql';
-        if (process.platform === 'win32' && psqlExecutable === 'psql') {
-          const detectedPath = findPsqlOnWindows();
-          if (detectedPath) {
-            psqlExecutable = detectedPath;
-            this.logger.log(`Auto-detected psql path on Windows: "${psqlExecutable}"`);
-          } else {
-            this.logger.warn('psql executable not found in common Windows directories. Will try calling "psql" from PATH.');
-          }
-        }
-        
-        let psqlSuccess = false;
-        try {
-          this.logger.log(`Attempting database restore via psql executable: "${psqlExecutable}"`);
-          await execFileAsync(psqlExecutable, ['-d', dbUrl, '-f', sqlPath], {
-            maxBuffer: 100 * 1024 * 1024,
-          });
-          psqlSuccess = true;
-          this.logger.log('psql restore completed successfully.');
-        } catch (psqlError: any) {
-          this.logger.warn(`psql restore failed: ${psqlError.message}. Falling back to programmatic SQL parsing and restore via Prisma...`);
-        }
-
-        if (!psqlSuccess) {
-          try {
-            await this.restoreSqlProgrammatically(sqlContent);
-            this.logger.log('Programmatic restore fallback completed successfully.');
-          } catch (fallbackError: any) {
-            this.logger.error(`Programmatic restore fallback failed: ${fallbackError.message}`, fallbackError.stack);
-            throw new InternalServerErrorException(
-              `Database restore failed: psql execution failed, and programmatic restore fallback also failed: ${fallbackError.message}`
-            );
-          }
-        }
+        this.logger.log('psql restore completed successfully with ON_ERROR_STOP and single transaction.');
+      } catch (psqlError: any) {
+        const stderr = (psqlError?.stderr || '').toString().trim();
+        const detail = stderr ? ` ${stderr.slice(0, 400)}` : '';
+        throw new InternalServerErrorException(
+          `Database restore failed atomically via psql.${detail} Programmatic restore fallback has been disabled for safety.`,
+        );
       }
 
       // 3. Restore uploads directory if present
       const uploadsBackupPath = resolve(extractDir, 'uploads');
       ensureInsideDirectory(extractDir, uploadsBackupPath);
       if (existsSync(uploadsBackupPath)) {
-        this.logger.log('Restoring uploads directory...');
-        const { rmSync, cpSync } = await import('fs');
-        if (existsSync(UPLOADS_DIR)) {
-          const files = readdirSync(UPLOADS_DIR);
-          for (const file of files) {
-            const filePath = resolve(UPLOADS_DIR, file);
-            rmSync(filePath, { recursive: true, force: true });
-          }
-        } else {
-          mkdirSync(UPLOADS_DIR, { recursive: true });
-        }
-        cpSync(uploadsBackupPath, UPLOADS_DIR, { recursive: true });
+        this.logger.log('Restoring uploads directory with rollback protection...');
+        this.restoreUploadsWithRollback(uploadsBackupPath);
       }
 
       this.logger.log(`Restore complete: ${fileName}`);
 
       // Audit log
       if (actorUserId) {
-        await this.auditLog(actorUserId, 'BACKUP_RESTORE', fileName, `Database and uploads restored from backup: ${fileName}`);
+        await this.auditLog(
+          actorUserId,
+          'BACKUP_RESTORE',
+          fileName,
+          `Database and uploads restored from backup: ${fileName}. reason="${normalizedReason}"`,
+        );
       }
 
       return {
         message: `Restore dari ${fileName} berhasil.`,
         restored: fileName,
       };
+    } catch (err: any) {
+      // Audit log for failed restore
+      if (actorUserId) {
+        const errorDetail = err?.message || 'Unknown error';
+        await this.auditLog(
+          actorUserId,
+          'BACKUP_RESTORE_FAILED',
+          fileName,
+          `Restore gagal dari backup: ${fileName}. reason="${normalizedReason}". error="${errorDetail.slice(0, 500)}"`,
+        ).catch(() => {});
+      }
+      throw err;
     } finally {
       // 4. Cleanup temp directory
       try {
@@ -926,7 +1400,8 @@ Gunakan utilitas CLI pg_restore/psql untuk memulihkan database.sql, dan salin/ek
     }
   }
 
-  async uploadAndRestoreBackup(file: Express.Multer.File, actorUserId: string): Promise<{ message: string; restored: string }> {
+  async uploadAndRestoreBackup(file: Express.Multer.File, actorUserId: string, reason?: string): Promise<{ message: string; restored: string }> {
+    const normalizedReason = normalizeRestoreReason(reason);
     const buffer = file.buffer;
     if (!buffer || buffer.length < 4 || buffer[0] !== 0x50 || buffer[1] !== 0x4b || buffer[2] !== 0x03 || buffer[3] !== 0x04) {
       throw new BadRequestException('Format berkas harus ZIP cadangan valid');
@@ -940,13 +1415,32 @@ Gunakan utilitas CLI pg_restore/psql untuk memulihkan database.sql, dan salin/ek
     if (!fileName.toLowerCase().endsWith('.zip')) {
       throw new BadRequestException('Nama berkas harus berakhiran .zip');
     }
-    const filePath = resolve(BACKUPS_DIR, fileName);
-    ensureInsideDirectory(BACKUPS_DIR, filePath);
 
-    writeFileSync(filePath, buffer);
-    this.logger.log(`[Backup] Uploaded backup saved to: ${filePath}`);
+    this.inspectBackupArchiveBuffer(buffer);
 
-    return this.restoreFromBackup(fileName, actorUserId);
+    const stagingDir = this.createStagingDirectory('uploaded-restore');
+    ensureInsideDirectory(BACKUP_STAGING_DIR, stagingDir);
+    const stagedFilePath = resolve(stagingDir, fileName);
+    ensureInsideDirectory(stagingDir, stagedFilePath);
+
+    let promotedFileName: string | null = null;
+    try {
+      writeFileSync(stagedFilePath, buffer);
+      this.logger.log(`[Backup] Uploaded backup staged at: ${stagedFilePath}`);
+
+      this.ensureBackupArchiveIsSafe(stagedFilePath);
+
+      promotedFileName = this.createSafeUploadedBackupName(fileName);
+      const promotedFilePath = resolveBackupFile(promotedFileName);
+      renameSync(stagedFilePath, promotedFilePath);
+      this.logger.log(`[Backup] Uploaded backup promoted to official store: ${promotedFilePath}`);
+
+      return this.restoreFromBackup(promotedFileName, actorUserId, normalizedReason);
+    } finally {
+      if (existsSync(stagingDir)) {
+        rmSync(stagingDir, { recursive: true, force: true });
+      }
+    }
   }
 
   async deleteBackup(fileName: string, actorUserId?: string): Promise<{ message: string }> {
@@ -992,69 +1486,6 @@ Gunakan utilitas CLI pg_restore/psql untuk memulihkan database.sql, dan salin/ek
       });
     } catch (err: any) {
       this.logger.warn(`Failed to write audit log for ${action}: ${err.message}`);
-    }
-  }
-
-  async restoreSqlProgrammatically(sqlContent: string): Promise<void> {
-    const rawStatements = parseSqlDump(sqlContent);
-    const dmlStatements = rawStatements.filter(stmt => {
-      const s = stmt.toUpperCase();
-      return s.startsWith('INSERT') || s.includes('SETVAL');
-    });
-
-    this.logger.log(`Parsed ${rawStatements.length} total statements. Filtered to ${dmlStatements.length} data/sequence statements.`);
-
-    // Truncate tables to clean up before restore
-    const tables = [
-      'StudentNote',
-      'StudentStatusHistory',
-      'StudentTimeline',
-      'RefreshToken',
-      'ActivityLog',
-      'Document',
-      'Guardian',
-      'Student',
-      'User',
-      'AcademicYear',
-      'Role',
-      'DocumentRequirement',
-      'SystemSetting',
-      'Sequence',
-      'Class',
-    ];
-
-    await this.prisma.$executeRawUnsafe("SET session_replication_role = 'replica'");
-    for (const table of tables) {
-      try {
-        await this.prisma.$executeRawUnsafe(`TRUNCATE TABLE "${table}" CASCADE`);
-        this.logger.log(`Truncated table: ${table}`);
-      } catch (e: any) {
-        this.logger.warn(`Error truncating table ${table}: ${e.message}`);
-      }
-    }
-
-    this.logger.log('Executing database restore statements inside a transaction...');
-    try {
-      await this.prisma.$transaction(
-        async (tx) => {
-          // Disable triggers inside transaction for safety
-          await tx.$executeRawUnsafe("SET session_replication_role = 'replica'");
-          for (const stmt of dmlStatements) {
-            await tx.$executeRawUnsafe(stmt);
-          }
-          await tx.$executeRawUnsafe("SET session_replication_role = 'origin'");
-        },
-        {
-          timeout: 180000, // 3 minutes
-        }
-      );
-      this.logger.log('Programmatic restore completed successfully.');
-    } catch (err: any) {
-      this.logger.error(`Transaction failed: ${err.message}`, err.stack);
-      try {
-        await this.prisma.$executeRawUnsafe("SET session_replication_role = 'origin'");
-      } catch {}
-      throw err;
     }
   }
 

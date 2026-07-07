@@ -103,7 +103,9 @@ async function bootstrap() {
     const userCount = await prisma.user.count({ where: { NOT: { id: 'SYSTEM' } } });
     if (userCount === 0) {
       const bcrypt = require('bcryptjs');
-      const passwordHash = await bcrypt.hash('admin123', 12);
+      const crypto = require('crypto');
+      const adminPassword = process.env.ADMIN_BOOTSTRAP_PASSWORD || crypto.randomBytes(16).toString('base64url');
+      const passwordHash = await bcrypt.hash(adminPassword, 12);
       const role = await prisma.role.findFirst({ where: { name: 'SUPER_ADMIN' } });
       if (role) {
         await prisma.user.create({
@@ -116,7 +118,11 @@ async function bootstrap() {
             roleId: role.id,
           },
         });
-        console.log('🌱 Seeded default admin user (admin@arbal.local / admin123) for bootstrap/recovery.');
+        console.log('🌱 Seeded default admin user (admin@arbal.local)');
+        console.log(`🔑 Admin password: ${adminPassword}`);
+        if (!process.env.ADMIN_BOOTSTRAP_PASSWORD) {
+          console.log('⚠️  Password was auto-generated. Set ADMIN_BOOTSTRAP_PASSWORD in .env to control this.');
+        }
       }
     }
   } catch (err: any) {
